@@ -32,6 +32,13 @@ html, body {
 }
 
 #stage { height: 100%; position: relative; }
+#stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 130px rgba(5, 8, 6, 0.3);
+}
 
 /* The world itself */
 #world { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
@@ -211,6 +218,25 @@ html, body {
 .chronicle-entry.kind-merge .what { color: var(--accent); }
 .chronicle-entry.kind-born .what { color: var(--good); }
 
+/* Camera */
+#world { touch-action: none; cursor: grab; }
+#world:active { cursor: grabbing; }
+#cam-controls {
+  position: absolute;
+  left: 0.9rem;
+  bottom: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+#cam-controls .btn {
+  width: 2.1rem;
+  height: 2.1rem;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+}
+
 /* Beckon */
 .beckon-ripple {
   fill: none;
@@ -347,7 +373,7 @@ html, body {
 <p><strong>On a phone?</strong> Your device probably opened this file in a built-in viewer that doesn't run JavaScript. Save the file, then open it with a real browser: in your Files app, long-press the file and choose <em>Open with → Chrome</em> (or Firefox). The world will be waiting.</p>
 </div></noscript>
 <div id="stage"></div>
-<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.10.0 */;</script>
+<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.11.0 */;</script>
 <script id="dg-world">
 /* Driftgarden — world logic.
  * Everything that is TRUE about a world lives here: genomes, growth, kith,
@@ -2184,6 +2210,81 @@ html, body {
   var lastSayings = {};         // per-kith last spoken line, for chirp timing
   var songStep = 0;             // which note of the melody comes next
 
+  /* ---------- the camera ----------
+   * The scene lives in a 1000x1000 box (sky above y=470, land below).
+   * The camera is a viewBox window with matched aspect, so nothing is ever
+   * cropped away silently: zoom with the wheel or pinch, pan by dragging,
+   * and the default framing always shows the whole of the land. */
+
+  var cam = { zoom: 1, cx: 500, cy: 735 };
+  var CAM_MIN_ZOOM = 0.55;
+  var CAM_MAX_ZOOM = 3;
+
+  function viewAspect() {
+    var r = stage.getBoundingClientRect();
+    return r.width > 0 ? r.height / r.width : 1;
+  }
+
+  function camWindow() {
+    var w = 1000 / cam.zoom;
+    var h = w * viewAspect();
+    return { w: w, h: h };
+  }
+
+  function clampCam() {
+    var win = camWindow();
+    cam.zoom = Math.max(CAM_MIN_ZOOM, Math.min(CAM_MAX_ZOOM, cam.zoom));
+    // keep the window over the scene, with a little breathing room
+    var minCx = Math.min(500, -150 + win.w / 2), maxCx = Math.max(500, 1150 - win.w / 2);
+    var minCy = Math.min(500, -450 + win.h / 2), maxCy = Math.max(500, 1030 - win.h / 2);
+    cam.cx = Math.max(minCx, Math.min(maxCx, cam.cx));
+    cam.cy = Math.max(minCy, Math.min(maxCy, cam.cy));
+  }
+
+  function camViewBox() {
+    clampCam();
+    var win = camWindow();
+    return (cam.cx - win.w / 2).toFixed(1) + ' ' + (cam.cy - win.h / 2).toFixed(1) + ' ' +
+      win.w.toFixed(1) + ' ' + win.h.toFixed(1);
+  }
+
+  function applyCam() {
+    var svg = document.getElementById('world');
+    if (svg) svg.setAttribute('viewBox', camViewBox());
+  }
+
+  // Default framing: the whole of the land in view, anchored to its base.
+  function resetCam() {
+    var aspect = viewAspect();
+    // want window height >= the land's 545 units and width >= 1010
+    var needZoomForHeight = (1000 * aspect) / 545;
+    cam.zoom = Math.max(CAM_MIN_ZOOM, Math.min(1, Math.min(needZoomForHeight, 1)));
+    var win = { w: 1000 / cam.zoom, h: (1000 / cam.zoom) * aspect };
+    cam.cx = 500;
+    cam.cy = 1015 - win.h / 2; // land's base sits just inside the bottom edge
+    clampCam();
+  }
+
+  window.addEventListener('resize', function () { resetCam(); applyCam(); });
+
+  var camPointers = {}; // active pointers on the world (for pan & pinch)
+  var camPinch = null;
+
+  function zoomAt(svg, clientX, clientY, factor) {
+    if (!svg) return;
+    var pt = svg.createSVGPoint();
+    pt.x = clientX; pt.y = clientY;
+    var ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    var p = pt.matrixTransform(ctm.inverse());
+    var oldZoom = cam.zoom;
+    cam.zoom = Math.max(CAM_MIN_ZOOM, Math.min(CAM_MAX_ZOOM, oldZoom * factor));
+    var keep = oldZoom / cam.zoom;
+    cam.cx = p.x + (cam.cx - p.x) * keep;
+    cam.cy = p.y + (cam.cy - p.y) * keep;
+    applyCam();
+  }
+
   /* ---------- rendering ---------- */
 
   var stage = document.getElementById('stage');
@@ -2365,29 +2466,58 @@ html, body {
     if (terrainImageCache[worldId]) return terrainImageCache[worldId];
     var terrain = W.makeTerrain(worldId);
     var canvas = document.createElement('canvas');
-    var CW = 480, CH = 256;
+    var CW = 600, CH = 320;
     canvas.width = CW; canvas.height = CH;
     var ctx = canvas.getContext('2d');
     var img = ctx.createImageData(CW, CH);
     // Screen consistency: image spans y 470..1000, i.e. world y 0.55..~0.99.
     var ySpan = 530 / 1200;
+    var baseSeed = W.hash32(worldId);
+
+    function cellAt(wx, wy) {
+      return terrain.heights[
+        Math.max(0, Math.min(terrain.rows - 1, Math.floor((wy - 0.55) / 0.45 * terrain.rows)))][
+        Math.max(0, Math.min(terrain.cols - 1, Math.floor(wx * terrain.cols)))];
+    }
+
     for (var py = 0; py < CH; py++) {
       var wy = 0.55 + (py / CH) * ySpan;
       for (var px = 0; px < CW; px++) {
         var wx = px / CW;
         var biome = W.biomeAt(terrain, wx, wy);
         var base = BIOME_PAINT[biome];
-        // gentle height shading + per-pixel grain
-        var h = 0;
-        var cell = terrain.heights[
-          Math.max(0, Math.min(terrain.rows - 1, Math.floor((wy - 0.55) / 0.45 * terrain.rows)))][
-          Math.max(0, Math.min(terrain.cols - 1, Math.floor(wx * terrain.cols)))];
-        h = (cell - 0.5) * 34;
-        var grain = ((W.hash32(worldId) ^ (px * 7919 + py * 104729)) % 13) - 6;
+        var cell = cellAt(wx, wy);
+        var r = base[0], g = base[1], b = base[2];
+
+        if (biome === 'deep' || biome === 'shallows') {
+          // water: darker with depth, a touch greener in the shallows
+          var depth = Math.max(0, terrain.waterline - cell);
+          r -= depth * 90; g -= depth * 55; b -= depth * 20;
+          if (biome === 'shallows') { g += 8; b += 6; }
+        } else {
+          // relief: slopes facing the light (from the top of the map) glow;
+          // slopes falling away shade — the flat world gains its 3rd dimension
+          var north = cellAt(wx, Math.max(0.551, wy - 0.012));
+          var slope = (cell - north) * 260;
+          r += slope; g += slope; b += slope;
+          var lift = (cell - 0.5) * 26;
+          r += lift; g += lift; b += lift;
+        }
+
+        // per-biome texture: grass tufts, sand ripples, rock speckle
+        var n = (baseSeed ^ (px * 7919 + py * 104729)) >>> 0;
+        var grain = (n % 13) - 6;
+        if (biome === 'meadow' && n % 23 === 0) { g += 16; r -= 4; }          // tufts
+        else if (biome === 'shore' && n % 17 === 0) { r += 12; g += 10; }     // ripples
+        else if ((biome === 'rock' || biome === 'peak') && n % 11 === 0) {    // speckle
+          var fleck = (n % 2 === 0) ? 14 : -12;
+          r += fleck; g += fleck; b += fleck;
+        }
+
         var i = (py * CW + px) * 4;
-        img.data[i] = Math.max(0, Math.min(255, base[0] + h + grain));
-        img.data[i + 1] = Math.max(0, Math.min(255, base[1] + h + grain));
-        img.data[i + 2] = Math.max(0, Math.min(255, base[2] + h + grain));
+        img.data[i] = Math.max(0, Math.min(255, r + grain));
+        img.data[i + 1] = Math.max(0, Math.min(255, g + grain));
+        img.data[i + 2] = Math.max(0, Math.min(255, b + grain));
         img.data[i + 3] = 255;
       }
     }
@@ -2416,9 +2546,17 @@ html, body {
       '<stop offset="0" stop-color="' + sky[0] + '"/><stop offset="1" stop-color="' + sky[1] + '"/></linearGradient>' +
       '<linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">' +
       '<stop offset="0" stop-color="' + sky[2] + '"/><stop offset="1" stop-color="#131a12"/></linearGradient></defs>');
-    svgParts.push('<rect x="0" y="0" width="1000" height="520" fill="url(#sky)"/>');
+    // backdrop extends far beyond the scene so a zoomed-out camera never
+    // finds the void; the painted land sits in the middle of it
+    svgParts.push('<rect x="-800" y="-800" width="2600" height="1320" fill="url(#sky)"/>');
+    svgParts.push('<rect x="-800" y="470" width="2600" height="1400" fill="#131a12"/>');
     svgParts.push('<image x="0" y="470" width="1000" height="530" preserveAspectRatio="none" href="' + terrainDataURL(state.id) + '"/>');
     svgParts.push('<rect x="0" y="470" width="1000" height="530" fill="url(#ground)" opacity="0.35"/>');
+    // horizon haze: the land breathes distance
+    svgParts.push('<defs><linearGradient id="haze" x1="0" y1="0" x2="0" y2="1">' +
+      '<stop offset="0" stop-color="' + sky[1] + '" stop-opacity="0.34"/>' +
+      '<stop offset="1" stop-color="' + sky[1] + '" stop-opacity="0"/></linearGradient></defs>');
+    svgParts.push('<rect x="-800" y="470" width="2600" height="180" fill="url(#haze)" pointer-events="none"/>');
     var hour = new Date().getHours();
     if (hour >= 21 || hour < 5) {
       svgParts.push('<circle cx="840" cy="110" r="34" fill="#f4f1de" opacity="0.9"/>' +
@@ -2458,13 +2596,18 @@ html, body {
         '<ellipse class="mist m3" cx="480" cy="920" rx="380" ry="80"/></g>');
     }
     if (wx.kind === 'storm') {
-      svgParts.push('<rect x="0" y="0" width="1000" height="1000" fill="#0a0f1e" opacity="0.28" pointer-events="none"/>' +
-        '<rect class="lightning" x="0" y="0" width="1000" height="1000" fill="#eef4ff" pointer-events="none"/>');
+      svgParts.push('<rect x="-800" y="-800" width="2600" height="2600" fill="#0a0f1e" opacity="0.28" pointer-events="none"/>' +
+        '<rect class="lightning" x="-800" y="-800" width="2600" height="2600" fill="#eef4ff" pointer-events="none"/>');
     }
 
     stage.innerHTML =
-      '<svg id="world" class="wx-' + wx.kind + '" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMax slice" role="img" aria-label="The garden">' +
+      '<svg id="world" class="wx-' + wx.kind + '" viewBox="' + camViewBox() + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="The garden">' +
       svgParts.join('') + '</svg>' +
+      '<div id="cam-controls">' +
+      '<button class="btn small" data-cam="in" title="Zoom in">+</button>' +
+      '<button class="btn small" data-cam="out" title="Zoom out">−</button>' +
+      '<button class="btn small" data-cam="reset" title="See the whole land">⌖</button>' +
+      '</div>' +
       topbarHTML() +
       panelHTML() +
       modalHTML() +
@@ -3162,23 +3305,83 @@ html, body {
       });
     });
 
-    // a click on bare land is a soft call — the curious will come
+    // the camera: wheel and pinch to zoom, drag to pan — and a plain tap
+    // on bare land is still a soft call
     var worldSvg = document.getElementById('world');
-    if (worldSvg) worldSvg.addEventListener('click', function (event) {
-      if (event.target.closest && (event.target.closest('.plant-group') || event.target.closest('.kith-group'))) return;
-      var pt = worldSvg.createSVGPoint();
-      pt.x = event.clientX; pt.y = event.clientY;
-      var ctm = worldSvg.getScreenCTM();
-      if (!ctm) return;
-      var p = pt.matrixTransform(ctm.inverse());
-      var wx = (p.x - 40) / 920;
-      var wy = 0.55 + (p.y - 470) / 1200;
-      if (wx < 0.02 || wx > 0.98 || wy < 0.555 || wy > 0.99) return; // the sky does not listen
-      if (!W.isLandAt(W.makeTerrain(state.id), wx, wy)) { toast('Only ripples answer from the water.'); return; }
-      beacon = { x: wx, y: wy, until: Date.now() + 45000 };
-      selected = null;
-      render();
-      toast('You call softly. The curious will come.');
+    if (worldSvg) {
+      worldSvg.addEventListener('wheel', function (event) {
+        event.preventDefault();
+        zoomAt(worldSvg, event.clientX, event.clientY, event.deltaY < 0 ? 1.15 : 1 / 1.15);
+      }, { passive: false });
+
+      worldSvg.addEventListener('pointerdown', function (event) {
+        camPointers[event.pointerId] = { x: event.clientX, y: event.clientY, target: event.target, moved: false };
+        try { worldSvg.setPointerCapture(event.pointerId); } catch (e) { /* fine */ }
+        var ids = Object.keys(camPointers);
+        if (ids.length === 2) {
+          var a = camPointers[ids[0]], b = camPointers[ids[1]];
+          camPinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) };
+        }
+      });
+
+      worldSvg.addEventListener('pointermove', function (event) {
+        var p = camPointers[event.pointerId];
+        if (!p) return;
+        var ids = Object.keys(camPointers);
+        if (camPinch && ids.length === 2) {
+          p.x = event.clientX; p.y = event.clientY; p.moved = true;
+          var a = camPointers[ids[0]], b = camPointers[ids[1]];
+          var dist = Math.hypot(a.x - b.x, a.y - b.y);
+          if (camPinch.dist > 0 && dist > 0) {
+            zoomAt(worldSvg, (a.x + b.x) / 2, (a.y + b.y) / 2, dist / camPinch.dist);
+          }
+          camPinch.dist = dist;
+          return;
+        }
+        var dx = event.clientX - p.x, dy = event.clientY - p.y;
+        if (!p.moved && Math.abs(dx) + Math.abs(dy) < 7) return;
+        p.moved = true;
+        var rect = worldSvg.getBoundingClientRect();
+        var scale = camWindow().w / rect.width;
+        cam.cx -= dx * scale;
+        cam.cy -= dy * scale;
+        p.x = event.clientX; p.y = event.clientY;
+        applyCam();
+      });
+
+      function releasePointer(event) {
+        var p = camPointers[event.pointerId];
+        delete camPointers[event.pointerId];
+        if (Object.keys(camPointers).length < 2) camPinch = null;
+        if (!p || p.moved || event.type === 'pointercancel') return;
+        // a clean tap: the soft call
+        if (p.target.closest && (p.target.closest('.plant-group') || p.target.closest('.kith-group') || p.target.closest('.btn'))) return;
+        var pt = worldSvg.createSVGPoint();
+        pt.x = event.clientX; pt.y = event.clientY;
+        var ctm = worldSvg.getScreenCTM();
+        if (!ctm) return;
+        var scenePoint = pt.matrixTransform(ctm.inverse());
+        var wx = (scenePoint.x - 40) / 920;
+        var wy = 0.55 + (scenePoint.y - 470) / 1200;
+        if (wx < 0.02 || wx > 0.98 || wy < 0.555 || wy > 0.99) return; // the sky does not listen
+        if (!W.isLandAt(W.makeTerrain(state.id), wx, wy)) { toast('Only ripples answer from the water.'); return; }
+        beacon = { x: wx, y: wy, until: Date.now() + 45000 };
+        selected = null;
+        render();
+        toast('You call softly. The curious will come.');
+      }
+      worldSvg.addEventListener('pointerup', releasePointer);
+      worldSvg.addEventListener('pointercancel', releasePointer);
+    }
+
+    stage.querySelectorAll('[data-cam]').forEach(function (node) {
+      node.addEventListener('click', function () {
+        var action = node.getAttribute('data-cam');
+        if (action === 'reset') { resetCam(); applyCam(); return; }
+        var rect = stage.getBoundingClientRect();
+        zoomAt(document.getElementById('world'), rect.left + rect.width / 2, rect.top + rect.height / 2,
+          action === 'in' ? 1.3 : 1 / 1.3);
+      });
     });
 
     var worldName = document.getElementById('world-name');
@@ -3253,6 +3456,7 @@ html, body {
   /* ---------- boot ---------- */
 
   boot();
+  resetCam();
   render();
   announceNews(bootNews);
 
