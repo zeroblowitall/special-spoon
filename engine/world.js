@@ -109,30 +109,96 @@
     });
   }
 
-  /* ---------- genomes ---------- */
+  /* ---------- flora: every world is its own planet ----------
+   * A world's flora palette (archetypes + a species-naming tongue) derives
+   * purely from its id, like the land. Plants CARRY their genome, so foreign
+   * flora arriving in a merge visibly transforms the receiving world. */
 
-  function newPlantGenome(rng) {
+  var PLANT_FORMS = ['stalk', 'rosette', 'puff', 'spire', 'tendril', 'pod'];
+  var FLORA_CONS = ['vr', 'zl', 'th', 'k', 'ss', 'ph', 'gr', 'mn', 'x', 'q', 'fl', 'br', 't', 'sh', 'l', 'w'];
+  var FLORA_VOWS = ['a', 'e', 'i', 'o', 'u', 'ae', 'ia', 'ou', 'y', 'ei'];
+  var FLORA_ENDS = ['', 'a', 'is', 'um', 'or', 'ex', 'il', 'ka', 'oss', 'yn'];
+  var floraCache = {};
+
+  function makeFlora(worldId) {
+    if (floraCache[worldId]) return floraCache[worldId];
+    var rng = mulberry32(hash32(worldId + ':flora'));
+    function pickSome(list, n) {
+      var pool = list.slice(), out = [];
+      while (out.length < n && pool.length) out.push(pool.splice(Math.floor(rng() * pool.length), 1)[0]);
+      return out;
+    }
+    var flora = {
+      cons: pickSome(FLORA_CONS, 4),   // this world's naming tongue
+      vows: pickSome(FLORA_VOWS, 3),
+      ends: pickSome(FLORA_ENDS, 4),
+      archetypes: []
+    };
+    var count = 4 + Math.floor(rng() * 3); // 4-6 archetypes per world
+    for (var i = 0; i < count; i++) {
+      flora.archetypes.push({
+        form: pick(rng, PLANT_FORMS),
+        hue: Math.floor(rng() * 360),
+        hueSpread: 18 + rng() * 55,
+        size: 0.4 + rng() * 0.45,      // deliberately small — scenery, not stars
+        aspect: 0.7 + rng() * 0.8,
+        glow: rng() < 0.22
+      });
+    }
+    floraCache[worldId] = flora;
+    return flora;
+  }
+
+  function floraSpeciesName(flora, rng) {
+    var name = '';
+    var syllables = rng() < 0.7 ? 2 : 3;
+    for (var i = 0; i < syllables; i++) {
+      name += pick(rng, flora.cons) + pick(rng, flora.vows);
+    }
+    if (name.length < 9) name += pick(rng, flora.ends);
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  }
+
+  function newPlantGenome(rng, arch) {
     return {
-      hue: Math.floor(rng() * 360),
-      height: 70 + Math.floor(rng() * 90),
-      branches: 2 + Math.floor(rng() * 4),
-      petals: 4 + Math.floor(rng() * 6),
-      leaf: 0.6 + rng() * 0.9,
+      form: arch.form,
+      hue: ((Math.round(arch.hue + (rng() - 0.5) * arch.hueSpread) % 360) + 360) % 360,
+      size: Math.max(0.2, Math.min(1.2, arch.size * (0.8 + rng() * 0.4))),
+      aspect: Math.max(0.5, Math.min(1.6, arch.aspect * (0.85 + rng() * 0.3))),
+      detail: 2 + Math.floor(rng() * 5),
+      glow: arch.glow,
       rate: 0.7 + rng() * 0.7
     };
   }
 
+  // Elder worlds' plants predate the flora system; give them modern genomes
+  // on demand so they can parent hybrids and be drawn by one renderer.
+  function modernGenome(g) {
+    if (g.form) return g;
+    return {
+      form: 'stalk',
+      hue: g.hue,
+      size: Math.max(0.2, Math.min(1.2, (g.height || 100) / 160)),
+      aspect: 1,
+      detail: Math.max(2, Math.min(6, g.petals || 4)),
+      glow: false,
+      rate: g.rate || 1
+    };
+  }
+
   function crossGenomes(rng, a, b, spec) {
-    // spec: { gene: [min, max, round?] }
+    // spec: { gene: [min, max, round?] } — numbers mutate & clamp; arrays
+    // splice; anything else (strings, booleans) is inherited whole.
     var child = {};
     Object.keys(spec).forEach(function (gene) {
       var value = rng() < 0.5 ? a[gene] : b[gene];
-      if (Array.isArray(value)) { // voices etc.: splice the arrays
+      if (Array.isArray(value)) {
         var other = value === a[gene] ? b[gene] : a[gene];
         var cut = Math.floor(rng() * value.length);
         child[gene] = value.slice(0, cut).concat(other.slice(cut));
         return;
       }
+      if (typeof value !== 'number') { child[gene] = value; return; }
       if (rng() < 0.3) value = value * (1 + (rng() - 0.5) * 0.3); // mutation
       var lo = spec[gene][0], hi = spec[gene][1];
       if (spec[gene][2]) value = Math.round(value);
@@ -142,8 +208,8 @@
   }
 
   var PLANT_GENE_SPEC = {
-    hue: [0, 359, true], height: [50, 180, true], branches: [2, 6, true],
-    petals: [4, 10, true], leaf: [0.4, 1.8], rate: [0.5, 1.6]
+    form: [0, 0], hue: [0, 359, true], size: [0.2, 1.2], aspect: [0.5, 1.6],
+    detail: [2, 7, true], glow: [0, 0], rate: [0.5, 1.6]
   };
 
   function newKithGenome(rng) {
@@ -299,15 +365,108 @@
     });
   }
 
+  /* ---------- weather: identity + time, no stored state ----------
+   * Every copy of the same world computes the same skies, always. Climate
+   * leans on the land: lake-worlds rain and mist, peak-worlds storm. */
+
+  var WX_BUCKET_MS = 2 * 3600 * 1000; // weather changes every couple of hours
+  var statsCache = {};
+
+  function terrainStats(worldId) {
+    if (statsCache[worldId]) return statsCache[worldId];
+    var terrain = makeTerrain(worldId);
+    var counts = { water: 0, soil: 0, high: 0, total: 0 };
+    for (var r = 0; r < terrain.rows; r += 2) {
+      for (var c = 0; c < terrain.cols; c += 2) {
+        var b = biomeAt(terrain, (c + 0.5) / terrain.cols, 0.55 + (r + 0.5) / terrain.rows * 0.45);
+        counts.total++;
+        if (b === 'deep' || b === 'shallows') counts.water++;
+        else if (b === 'shore' || b === 'meadow') counts.soil++;
+        else counts.high++;
+      }
+    }
+    var stats = {
+      water: counts.water / counts.total,
+      soil: counts.soil / counts.total,
+      high: counts.high / counts.total
+    };
+    statsCache[worldId] = stats;
+    return stats;
+  }
+
+  function climateOf(worldId) {
+    var stats = terrainStats(worldId);
+    var rng = mulberry32(hash32(worldId + ':climate'));
+    return {
+      storm: 0.05 + stats.high * 0.35 + rng() * 0.06,
+      rain: 0.12 + stats.water * 0.5,
+      mist: 0.05 + stats.water * 0.3,
+      breeze: 0.18
+    };
+  }
+
+  function weatherAt(worldId, t) {
+    var bucket = Math.floor(t / WX_BUCKET_MS);
+    var rng = mulberry32(hash32(worldId + ':wx:' + bucket));
+    var roll = rng();
+    var c = climateOf(worldId);
+    var kind = 'clear';
+    if (roll < c.storm) kind = 'storm';
+    else if (roll < c.storm + c.rain) kind = 'rain';
+    else if (roll < c.storm + c.rain + c.mist) kind = 'mist';
+    else if (roll < c.storm + c.rain + c.mist + c.breeze) kind = 'breeze';
+    return { kind: kind, bucket: bucket, intensity: 0.5 + rng() * 0.5 };
+  }
+
+  var STORM_TEXTS = [
+    'A storm broke over {w}. The kith huddled while the sky argued with itself.',
+    'Thunder walked across {w} for hours. Every leaf remembered it.',
+    'A great storm scoured {w}; by morning the air tasted washed and new.'
+  ];
+
+  // Called by any live session; chronicles each storm exactly once, with a
+  // deterministic id so every copy of the world remembers the SAME storm.
+  function weatherTick(w) {
+    var wx = weatherAt(w.id, env.now());
+    if (wx.kind === 'storm') {
+      var id = 's' + w.id + '-' + wx.bucket;
+      var already = w.chronicle.some(function (e) { return e.id === id; });
+      if (!already) {
+        var textRng = mulberry32(hash32(id));
+        chronicle(w, 'storm', pick(textRng, STORM_TEXTS).replace('{w}', w.name), id);
+      }
+    }
+    return wx;
+  }
+
   /* ---------- world ---------- */
 
-  function newWorld() {
-    var id = env.newId();
+  // Prospect candidate worlds until the land fits the asked temperament.
+  function mineWorldId(temperament) {
+    var best = null, bestScore = -Infinity;
+    for (var i = 0; i < 24; i++) {
+      var id = env.newId();
+      var s = terrainStats(id);
+      var score = 0;
+      if (temperament === 'lakeland') score = s.water;
+      else if (temperament === 'highlands') score = s.high - Math.max(0, s.water - 0.25);
+      else if (temperament === 'plains') score = s.soil - s.high - s.water;
+      else if (temperament === 'drylands') score = -s.water + s.soil * 0.3;
+      if (score > bestScore) { bestScore = score; best = id; }
+    }
+    return best;
+  }
+
+  function newWorld(opts) {
+    opts = opts || {};
+    var id = (opts.temperament && opts.temperament !== 'surprise')
+      ? mineWorldId(opts.temperament)
+      : env.newId();
     var rng = mulberry32(hash32(id));
     var w = {
       format: 'driftgarden/1',
       id: id,
-      name: makeWorldName(rng),
+      name: opts.name ? String(opts.name).slice(0, 48) : makeWorldName(rng),
       born: env.now(),
       clock: 0,
       plants: {},
@@ -339,12 +498,14 @@
     var rng = mulberry32(hash32(w.id + ':' + (w.clock + 1)));
     var id = env.newId();
     var terrain = makeTerrain(w.id);
+    var flora = makeFlora(w.id);
     var spot = findSpot(w, 'seed:' + id, isSoilAt);
+    var arch = flora.archetypes[Math.floor(rng() * flora.archetypes.length)];
     var plant = {
       id: id,
-      species: makeSpeciesName(rng),
+      species: floraSpeciesName(flora, rng),
       name: null,
-      genome: newPlantGenome(rng),
+      genome: newPlantGenome(rng, arch),
       x: spot.x,
       y: spot.y,
       // A plant carries the vigour of its native soil for life, wherever
@@ -680,11 +841,13 @@
       // The gardens cross too.
       if (ourPlantParent && theirPlantParent && ourPlantParent.id !== theirPlantParent.id) {
         var plantParents = [ourPlantParent, theirPlantParent].sort(function (a, b) { return a.id < b.id ? -1 : 1; });
+        // The hybrid is named in the canonical first world's tongue so both
+        // copies of the merge christen it identically.
         hybrid = {
           id: 'p' + sortedIds.join('') + '-' + mergeClock,
-          species: makeSpeciesName(rng),
+          species: floraSpeciesName(makeFlora(sortedIds[0]), rng),
           name: null,
-          genome: crossGenomes(rng, plantParents[0].genome, plantParents[1].genome, PLANT_GENE_SPEC),
+          genome: crossGenomes(rng, modernGenome(plantParents[0].genome), modernGenome(plantParents[1].genome), PLANT_GENE_SPEC),
           x: 0.2 + rng() * 0.6,
           y: 0.6 + rng() * 0.3,
           // hybrid vigour is inherited, not local — identical in every copy
@@ -778,6 +941,11 @@
     isLandAt: isLandAt,
     isSoilAt: isSoilAt,
     settleImmigrants: settleImmigrants,
+    makeFlora: makeFlora,
+    modernGenome: modernGenome,
+    terrainStats: terrainStats,
+    weatherAt: weatherAt,
+    weatherTick: weatherTick,
     newWorld: newWorld,
     looksLikeWorld: looksLikeWorld,
     ensureKith: ensureKith,

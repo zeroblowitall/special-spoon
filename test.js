@@ -250,7 +250,78 @@ check('no plant is left underwater after a merge', Object.keys(host.plants)
 check('no kith is left underwater after a merge', Object.keys(host.kith)
   .every(id => W.isLandAt(hostTerrain, host.kith[id].x, host.kith[id].y)));
 
-/* ---------- 8. extractWorld round-trip ---------- */
+/* ---------- 8. flora: every world its own planet ---------- */
+
+console.log('flora');
+const f1 = W.makeFlora('floraworld000001');
+const f2 = W.makeFlora('floraworld000001');
+const f3 = W.makeFlora('otherplanet00001');
+check('flora palette is deterministic per world', stable(f1) === stable(f2));
+check('different worlds grow different flora', stable(f1) !== stable(f3));
+check('palette holds 4-6 archetypes', f1.archetypes.length >= 4 && f1.archetypes.length <= 6);
+
+const planet = W.newWorld();
+const planetFlora = W.makeFlora(planet.id);
+const archForms = {};
+planetFlora.archetypes.forEach(a => { archForms[a.form] = true; });
+for (let i = 0; i < 10; i++) W.plantSeed(planet);
+check('every plant grows a modern genome with a form', Object.values(planet.plants)
+  .every(p => p.genome.form && typeof p.genome.size === 'number'));
+check('every plant belongs to this world\'s palette', Object.values(planet.plants)
+  .every(p => archForms[p.genome.form]));
+check('plants are small (size ≤ 1.2)', Object.values(planet.plants)
+  .every(p => p.genome.size <= 1.2));
+
+// a legacy plant (v0.1 genome) can still parent a hybrid
+const legacy = { hue: 120, height: 150, branches: 3, petals: 6, leaf: 1, rate: 1 };
+const modernised = W.modernGenome(legacy);
+check('legacy genomes modernise', modernised.form === 'stalk' && modernised.size <= 1.2 && modernised.rate === 1);
+
+/* ---------- 9. weather ---------- */
+
+console.log('weather');
+const wxA1 = W.weatherAt('weatherworld0001', fakeNow);
+const wxA2 = W.weatherAt('weatherworld0001', fakeNow);
+check('weather is deterministic for a world and moment', wxA1.kind === wxA2.kind && wxA1.intensity === wxA2.intensity);
+let differs = false;
+for (let h = 0; h < 60 && !differs; h++) {
+  const t = fakeNow + h * 2 * 3600 * 1000;
+  if (W.weatherAt('weatherworld0001', t).kind !== W.weatherAt('weatherworld0002', t).kind) differs = true;
+}
+check('two worlds live under different skies', differs);
+
+// find a stormy moment and prove the chronicle records it exactly once
+const stormWorld = W.newWorld();
+let stormAt = null;
+for (let h = 0; h < 2000 && stormAt === null; h++) {
+  const t = fakeNow + h * 2 * 3600 * 1000;
+  if (W.weatherAt(stormWorld.id, t).kind === 'storm') stormAt = t;
+}
+check('storms do eventually come', stormAt !== null);
+if (stormAt !== null) {
+  const savedNow = fakeNow;
+  fakeNow = stormAt;
+  const before = stormWorld.chronicle.length;
+  W.weatherTick(stormWorld);
+  W.weatherTick(stormWorld);
+  check('a storm is chronicled exactly once', stormWorld.chronicle.length === before + 1);
+  check('the storm entry has a deterministic id', stormWorld.chronicle.slice(-1)[0].id.indexOf('s' + stormWorld.id) === 0);
+  fakeNow = savedNow;
+}
+
+/* ---------- 10. seeding temperaments ---------- */
+
+console.log('seeding');
+const lakeland = W.newWorld({ temperament: 'lakeland', name: 'Test Lakes' });
+const drylands = W.newWorld({ temperament: 'drylands' });
+const lakeStats = W.terrainStats(lakeland.id);
+const dryStats = W.terrainStats(drylands.id);
+check('a named world keeps its given name', lakeland.name === 'Test Lakes');
+check('lakeland is wetter than drylands', lakeStats.water > dryStats.water,
+  lakeStats.water.toFixed(2) + ' vs ' + dryStats.water.toFixed(2));
+check('temperament worlds are complete worlds', Object.keys(lakeland.kith).length === 3 && lakeland.chronicle.length > 0);
+
+/* ---------- 11. extractWorld round-trip ---------- */
 
 console.log('extraction');
 const json = JSON.stringify(A).replace(/</g, '\\u003c');

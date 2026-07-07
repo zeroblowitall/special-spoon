@@ -188,6 +188,65 @@ html, body {
 .chronicle-entry.kind-merge .what { color: var(--accent); }
 .chronicle-entry.kind-born .what { color: var(--good); }
 
+/* Weather */
+.raindrop {
+  stroke: rgba(195, 215, 245, 0.5);
+  stroke-width: 1.6;
+  animation: rainfall linear infinite;
+}
+@keyframes rainfall {
+  from { transform: translateY(0); }
+  to { transform: translateY(1080px); }
+}
+.wx-storm .raindrop { stroke: rgba(210, 225, 250, 0.65); stroke-width: 2; }
+.mist {
+  fill: #dfe8ea;
+  opacity: 0.1;
+  animation: mistdrift 26s ease-in-out infinite alternate;
+}
+.mist.m2 { opacity: 0.13; animation-duration: 34s; animation-delay: -12s; }
+.mist.m3 { opacity: 0.09; animation-duration: 22s; animation-delay: -5s; }
+@keyframes mistdrift {
+  from { transform: translateX(-60px); }
+  to { transform: translateX(60px); }
+}
+.lightning {
+  opacity: 0;
+  animation: lightningflash 9s linear infinite;
+}
+@keyframes lightningflash {
+  0%, 91%, 100% { opacity: 0; }
+  92% { opacity: 0.45; }
+  93% { opacity: 0.05; }
+  94% { opacity: 0.3; }
+  95% { opacity: 0; }
+}
+.wx-breeze .sway, .wx-storm .sway { animation-duration: 2.2s; }
+.wx-storm .kith-bob { animation-duration: 0.9s; }
+
+/* Worlds shelf */
+.badge-now {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 99px;
+  padding: 0.05rem 0.45rem;
+  vertical-align: middle;
+}
+.modal select {
+  background: #0e1310;
+  color: var(--ink);
+  border: 1px solid var(--panel-line);
+  border-radius: 8px;
+  padding: 0.45rem 0.6rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+.chronicle-entry .when .btn { margin-left: 0.2rem; }
+
+.chronicle-entry.kind-storm .what { color: #9db8dd; }
+
 /* Toasts */
 #toast {
   position: absolute;

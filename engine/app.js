@@ -54,13 +54,15 @@
     W.ensureKith(state);        // worlds preserved before the kith existed get theirs
     W.settleImmigrants(state);  // worlds preserved before the land existed settle onto it
     W.advanceGrowth(state);
+    W.weatherTick(state);       // today's sky is chronicled from the first moment
     save();
   }
 
   /* ---------- ephemeral UI state ---------- */
 
   var selected = null;   // { type: 'plant'|'kith', id: '...' } | null
-  var openModal = null;  // 'merge' | 'chronicle' | 'about' | null
+  var openModal = null;  // 'merge' | 'chronicle' | 'about' | 'worlds' | null
+  var lastWxKind = null; // re-render when the weather turns
 
   /* ---------- rendering ---------- */
 
@@ -158,8 +160,34 @@
     plants.forEach(function (p) { svgParts.push(drawPlant(p)); });
     svgParts.push('<g id="kith-layer">' + drawAllKith() + '</g>');
 
+    // weather, painted over everything
+    var wx = W.weatherAt(state.id, Date.now());
+    lastWxKind = wx.kind;
+    if (wx.kind === 'rain' || wx.kind === 'storm') {
+      var drops = [];
+      var rainRng = W.mulberry32(W.hash32(state.id + ':raindrops'));
+      var dropCount = wx.kind === 'storm' ? 46 : 28;
+      for (var d = 0; d < dropCount; d++) {
+        var rx = rainRng() * 1000;
+        drops.push('<line class="raindrop" x1="' + rx.toFixed(0) + '" y1="-40" x2="' + (rx - 8).toFixed(0) +
+          '" y2="-12" style="animation-delay:-' + (rainRng() * 1.4).toFixed(2) + 's;animation-duration:' +
+          (0.9 + rainRng() * 0.6).toFixed(2) + 's"/>');
+      }
+      svgParts.push('<g class="rain-layer">' + drops.join('') + '</g>');
+    }
+    if (wx.kind === 'mist') {
+      svgParts.push('<g class="mist-layer">' +
+        '<ellipse class="mist m1" cx="300" cy="600" rx="340" ry="70"/>' +
+        '<ellipse class="mist m2" cx="700" cy="780" rx="420" ry="90"/>' +
+        '<ellipse class="mist m3" cx="480" cy="920" rx="380" ry="80"/></g>');
+    }
+    if (wx.kind === 'storm') {
+      svgParts.push('<rect x="0" y="0" width="1000" height="1000" fill="#0a0f1e" opacity="0.28" pointer-events="none"/>' +
+        '<rect class="lightning" x="0" y="0" width="1000" height="1000" fill="#eef4ff" pointer-events="none"/>');
+    }
+
     stage.innerHTML =
-      '<svg id="world" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMax slice" role="img" aria-label="The garden">' +
+      '<svg id="world" class="wx-' + wx.kind + '" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMax slice" role="img" aria-label="The garden">' +
       svgParts.join('') + '</svg>' +
       topbarHTML() +
       panelHTML() +
@@ -172,50 +200,104 @@
   /* ---------- plants (unchanged visual language) ---------- */
 
   function drawPlant(p) {
-    var g = p.genome;
+    var g = W.modernGenome(p.genome);
     var pos = toScreen(p.x, p.y);
-    var stage01 = Math.max(0.08, p.growth);
-    var h = g.height * stage01 * (0.9 + (p.y - 0.55) * 1.1);
-    var stemColor = 'hsl(' + ((g.hue + 90) % 360) + ', 35%, 32%)';
-    var petal = 'hsl(' + g.hue + ', 68%, 62%)';
-    var center = 'hsl(' + ((g.hue + 40) % 360) + ', 80%, 55%)';
+    var stage01 = Math.max(0.1, p.growth);
+    var bloom = p.growth > 0.55 ? Math.min(1, (p.growth - 0.55) / 0.45) : 0;
+    var s = g.size * (0.85 + (p.y - 0.55) * 0.9); // nearer = larger, but small overall
+    var main = 'hsl(' + g.hue + ', 62%, 58%)';
+    var deep = 'hsl(' + ((g.hue + 40) % 360) + ', 50%, 40%)';
+    var pale = 'hsl(' + g.hue + ', 65%, 74%)';
+    var stem = 'hsl(' + ((g.hue + 100) % 360) + ', 30%, 34%)';
     var sel = selected && selected.type === 'plant' && selected.id === p.id;
+    var rng = W.mulberry32(W.hash32(p.id));
     var parts = [];
 
-    parts.push('<path d="M0 0 Q 6 ' + (-h * 0.5) + ' 0 ' + (-h) + '" stroke="' + stemColor + '" stroke-width="' + (3 + stage01 * 2) + '" fill="none" stroke-linecap="round"/>');
-
-    var leafRng = W.mulberry32(W.hash32(p.id));
-    for (var b = 0; b < g.branches; b++) {
-      var frac = 0.25 + (b / g.branches) * 0.55;
-      if (frac > stage01 + 0.15) break;
-      var ly = -h * frac;
-      var side = b % 2 === 0 ? 1 : -1;
-      var len = 16 * g.leaf * stage01 * (0.7 + leafRng() * 0.6);
-      parts.push('<path d="M0 ' + ly + ' q ' + (side * len) + ' ' + (-len * 0.35) + ' ' + (side * len * 1.6) + ' ' + (len * 0.15) +
-        ' q ' + (-side * len * 0.8) + ' ' + (len * 0.4) + ' ' + (-side * len * 1.6) + ' ' + (-len * 0.15) + ' Z" fill="' + stemColor + '" opacity="0.9"/>');
+    function glowHalo(x, y, r) {
+      return g.glow ? '<circle cx="' + x + '" cy="' + y + '" r="' + (r * 2.4).toFixed(1) + '" fill="' + pale + '" opacity="' + (0.18 + bloom * 0.12) + '"/>' : '';
     }
 
-    if (p.growth > 0.55) {
-      var bloom = Math.min(1, (p.growth - 0.55) / 0.45);
-      var r = (5 + g.petals * 0.9) * bloom;
-      var petals = [];
-      for (var i = 0; i < g.petals; i++) {
-        var ang = (i / g.petals) * Math.PI * 2;
-        petals.push('<ellipse cx="' + (Math.cos(ang) * r).toFixed(1) + '" cy="' + (-h + Math.sin(ang) * r).toFixed(1) +
-          '" rx="' + (r * 0.75).toFixed(1) + '" ry="' + (r * 0.45).toFixed(1) +
-          '" fill="' + petal + '" transform="rotate(' + (ang * 180 / Math.PI).toFixed(0) + ' ' + (Math.cos(ang) * r).toFixed(1) + ' ' + (-h + Math.sin(ang) * r).toFixed(1) + ')"/>');
+    if (g.form === 'stalk') {
+      var h = 42 * s * g.aspect * stage01;
+      parts.push('<path d="M0 0 Q ' + (4 * s) + ' ' + (-h * 0.5) + ' 0 ' + (-h) + '" stroke="' + stem + '" stroke-width="' + (1.5 + s) + '" fill="none" stroke-linecap="round"/>');
+      for (var i = 0; i < g.detail; i++) {
+        var fy = -h * (0.3 + i / g.detail * 0.5);
+        var side = i % 2 === 0 ? 1 : -1;
+        var len = 7 * s * stage01 * (0.8 + rng() * 0.4);
+        parts.push('<path d="M0 ' + fy.toFixed(1) + ' q ' + (side * len) + ' -2 ' + (side * len * 1.5) + ' 2" stroke="' + stem + '" stroke-width="' + s.toFixed(1) + '" fill="none"/>');
       }
-      parts.push('<g opacity="' + (0.6 + bloom * 0.4) + '">' + petals.join('') + '<circle cx="0" cy="' + -h + '" r="' + (r * 0.55) + '" fill="' + center + '"/></g>');
-    } else if (p.growth < 0.2) {
-      parts.push('<circle cx="0" cy="' + (-h) + '" r="3.5" fill="' + petal + '"/>');
+      if (bloom > 0) {
+        parts.push(glowHalo(0, -h, 4 * s));
+        for (var pi = 0; pi < 4; pi++) {
+          var pa = pi * Math.PI / 2 + 0.4;
+          parts.push('<ellipse cx="' + (Math.cos(pa) * 3.4 * s * bloom).toFixed(1) + '" cy="' + (-h + Math.sin(pa) * 3.4 * s * bloom).toFixed(1) + '" rx="' + (3 * s * bloom).toFixed(1) + '" ry="' + (1.8 * s * bloom).toFixed(1) + '" fill="' + main + '"/>');
+        }
+        parts.push('<circle cx="0" cy="' + -h + '" r="' + (2 * s * bloom).toFixed(1) + '" fill="' + pale + '"/>');
+      } else {
+        parts.push('<circle cx="0" cy="' + -h + '" r="' + (1.6 * s).toFixed(1) + '" fill="' + main + '"/>');
+      }
+    } else if (g.form === 'rosette') {
+      var leaves = g.detail + 3;
+      var lr = 11 * s * g.aspect * stage01;
+      for (var li = 0; li < leaves; li++) {
+        var la = (li / leaves) * 360;
+        parts.push('<ellipse cx="0" cy="' + (-lr * 0.42).toFixed(1) + '" rx="' + (2.6 * s).toFixed(1) + '" ry="' + (lr * 0.5).toFixed(1) + '" fill="' + (li % 2 ? main : deep) + '" opacity="0.9" transform="rotate(' + la.toFixed(0) + ')"/>');
+      }
+      if (bloom > 0) {
+        parts.push(glowHalo(0, 0, 3.5 * s));
+        parts.push('<circle cx="0" cy="0" r="' + (3.4 * s * bloom).toFixed(1) + '" fill="' + pale + '"/><circle cx="0" cy="0" r="' + (1.6 * s * bloom).toFixed(1) + '" fill="' + deep + '"/>');
+      }
+    } else if (g.form === 'puff') {
+      var ph = 20 * s * g.aspect * stage01;
+      parts.push('<line x1="0" y1="0" x2="0" y2="' + -ph + '" stroke="' + stem + '" stroke-width="' + (1 + s) + '"/>');
+      var pr = 6.5 * s * (0.3 + stage01 * 0.7);
+      parts.push(glowHalo(0, -ph, pr));
+      parts.push('<circle cx="0" cy="' + -ph + '" r="' + pr.toFixed(1) + '" fill="' + pale + '" opacity="0.75"/>');
+      for (var fi = 0; fi < g.detail + 3; fi++) {
+        var fa = rng() * Math.PI * 2, fr = rng() * pr;
+        parts.push('<circle cx="' + (Math.cos(fa) * fr).toFixed(1) + '" cy="' + (-ph + Math.sin(fa) * fr).toFixed(1) + '" r="' + (1.1 * s).toFixed(1) + '" fill="' + main + '" opacity="0.85"/>');
+      }
+    } else if (g.form === 'spire') {
+      var sh = 40 * s * g.aspect * stage01;
+      var zig = 'M0 0';
+      var steps = g.detail + 1;
+      for (var zi = 1; zi <= steps; zi++) {
+        zig += ' L' + ((zi % 2 ? 1 : -1) * 3.2 * s).toFixed(1) + ' ' + (-sh * zi / steps).toFixed(1);
+      }
+      parts.push(glowHalo(0, -sh * 0.6, 5 * s));
+      parts.push('<path d="' + zig + '" stroke="' + main + '" stroke-width="' + (2.2 * s).toFixed(1) + '" fill="none" stroke-linejoin="round"/>');
+      for (var ci = 1; ci < steps; ci++) {
+        parts.push('<path d="M' + ((ci % 2 ? 1 : -1) * 3.2 * s).toFixed(1) + ' ' + (-sh * ci / steps).toFixed(1) + ' l ' + ((ci % 2 ? 1 : -1) * 4.5 * s).toFixed(1) + ' ' + (-2 * s).toFixed(1) + ' l ' + ((ci % 2 ? -1 : 1) * 2 * s).toFixed(1) + ' ' + (3.4 * s).toFixed(1) + ' Z" fill="' + (ci % 2 ? pale : deep) + '" opacity="0.9"/>');
+      }
+    } else if (g.form === 'tendril') {
+      var th = 30 * s * g.aspect * stage01;
+      parts.push('<path d="M0 0 C ' + (6 * s) + ' ' + (-th * 0.3) + ' ' + (-7 * s) + ' ' + (-th * 0.55) + ' ' + (2 * s) + ' ' + (-th * 0.8) + ' S ' + (7 * s) + ' ' + -th + ' ' + (1 * s) + ' ' + -th + '" stroke="' + stem + '" stroke-width="' + (1.2 + s).toFixed(1) + '" fill="none" stroke-linecap="round"/>');
+      for (var di = 0; di < g.detail; di++) {
+        var dfy = -th * (0.2 + di / g.detail * 0.75);
+        parts.push('<circle cx="' + ((di % 2 ? 3.5 : -3.5) * s).toFixed(1) + '" cy="' + dfy.toFixed(1) + '" r="' + (1.5 * s).toFixed(1) + '" fill="' + main + '"/>');
+      }
+      if (bloom > 0) {
+        parts.push(glowHalo(1 * s, -th, 3 * s));
+        parts.push('<circle cx="' + (1 * s).toFixed(1) + '" cy="' + -th + '" r="' + (2.6 * s * bloom).toFixed(1) + '" fill="' + pale + '"/>');
+      }
+    } else { // pod
+      var pods = Math.max(2, Math.round(g.detail / 2));
+      for (var poi = 0; poi < pods; poi++) {
+        var px = (poi - (pods - 1) / 2) * 6 * s;
+        var pph = (12 + poi * 3) * s * g.aspect * stage01;
+        parts.push('<line x1="' + px.toFixed(1) + '" y1="0" x2="' + px.toFixed(1) + '" y2="' + -pph + '" stroke="' + stem + '" stroke-width="' + s.toFixed(1) + '"/>');
+        parts.push(glowHalo(px, -pph, 3 * s));
+        parts.push('<ellipse cx="' + px.toFixed(1) + '" cy="' + -pph + '" rx="' + (3.2 * s).toFixed(1) + '" ry="' + (4.5 * s * (0.4 + stage01 * 0.6)).toFixed(1) + '" fill="' + (poi % 2 ? main : deep) + '"/>');
+        if (bloom > 0.4) parts.push('<circle cx="' + px.toFixed(1) + '" cy="' + -pph + '" r="' + (1.2 * s).toFixed(1) + '" fill="' + pale + '"/>');
+      }
     }
 
     var label = p.name ? escapeHtml(p.name) : '';
-    var labelSvg = label ? '<text class="plant-label" x="0" y="16">' + label + '</text>' : '';
-    var halo = sel ? '<circle cx="0" cy="0" r="14" fill="none" stroke="#ffd166" stroke-width="2" opacity="0.9"/>' : '';
+    var labelSvg = label ? '<text class="plant-label" x="0" y="14">' + label + '</text>' : '';
+    var halo = sel ? '<circle cx="0" cy="0" r="11" fill="none" stroke="#ffd166" stroke-width="2" opacity="0.9"/>' : '';
 
     return '<g class="plant-group' + (sel ? ' selected' : '') + '" data-plant="' + p.id + '" transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')">' +
-      '<ellipse cx="0" cy="2" rx="14" ry="4" fill="rgba(0,0,0,0.25)"/>' + halo +
+      '<ellipse cx="0" cy="1.5" rx="' + (9 * s).toFixed(1) + '" ry="2.6" fill="rgba(0,0,0,0.22)"/>' + halo +
       '<g class="sway" style="animation-delay:-' + (W.hash32(p.id) % 6000) + 'ms">' + parts.join('') + '</g>' +
       labelSvg + '</g>';
   }
@@ -298,9 +380,13 @@
 
   /* ---------- chrome ---------- */
 
+  var WX_WORDS = { clear: '', breeze: 'a breeze is up', mist: 'mist on the water', rain: 'rain is falling', storm: 'a storm rages' };
+
   function topbarHTML() {
-    var gen = state.lineage.length > 0
-      ? ' <span class="gen">· woven from ' + (state.lineage.length + 1) + ' worlds</span>' : '';
+    var notes = [];
+    if (state.lineage.length > 0) notes.push('woven from ' + (state.lineage.length + 1) + ' worlds');
+    if (lastWxKind && WX_WORDS[lastWxKind]) notes.push(WX_WORDS[lastWxKind]);
+    var gen = notes.length ? ' <span class="gen">· ' + notes.join(' · ') + '</span>' : '';
     return '<div id="topbar">' +
       '<button id="world-name" title="Rename this world">' + escapeHtml(state.name) + gen + '</button>' +
       '<div class="bar-actions">' +
@@ -308,6 +394,7 @@
       '<button class="btn" data-act="merge">Merge worlds…</button>' +
       '<button class="btn" data-act="chronicle">Chronicle</button>' +
       '<button class="btn" data-act="preserve">Preserve</button>' +
+      '<button class="btn" data-act="worlds" title="Your worlds">⌂</button>' +
       '<button class="btn" data-act="about">?</button>' +
       '</div></div>';
   }
@@ -402,6 +489,33 @@
       inner = '<h2>The Chronicle</h2>' + lineage +
         '<div>' + entries + '</div>' +
         '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
+    } else if (openModal === 'worlds') {
+      var rows = listStoredWorlds().map(function (entry) {
+        var current = entry.id === state.id;
+        var when = entry.touched ? new Date(entry.touched).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '';
+        return '<div class="chronicle-entry"><span class="what"><strong>' + escapeHtml(entry.name) + '</strong>' +
+          (current ? ' <span class="badge-now">you are here</span>' : '') +
+          '<br><span class="muted">' + entry.kith + ' kith · ' + entry.plants + ' plants · last tended ' + when + '</span></span>' +
+          '<span class="when">' +
+          (current ? '' : '<button class="btn small" data-world-visit="' + entry.id + '">Visit</button> ') +
+          '<button class="btn small" data-world-forget="' + entry.id + '">Let go…</button>' +
+          '</span></div>';
+      }).join('');
+      inner = '<h2>Your worlds</h2>' +
+        '<p class="muted">Every world you tend in this browser lives here. Worlds you preserved as files exist beyond this list — a shared world can be abandoned, but never truly destroyed.</p>' +
+        '<div>' + rows + '</div>' +
+        '<h2 style="margin-top:1.25rem">Begin a new world</h2>' +
+        '<div class="row"><input type="text" id="nw-name" placeholder="A name (or leave blank for fate to choose)"></div>' +
+        '<div class="row"><label class="muted" for="nw-temp">The land:</label> ' +
+        '<select id="nw-temp">' +
+        '<option value="surprise">Surprise me</option>' +
+        '<option value="lakeland">Lakeland — water everywhere</option>' +
+        '<option value="highlands">Highlands — rock and peaks</option>' +
+        '<option value="plains">Plains — broad meadows</option>' +
+        '<option value="drylands">Drylands — scarcely a puddle</option>' +
+        '</select></div>' +
+        '<div class="row"><button class="btn primary" data-act="new-world">Bring it into being</button>' +
+        '<button class="btn" data-act="close-modal">Close</button></div>';
     } else if (openModal === 'about') {
       inner = '<h2>Driftgarden</h2>' +
         '<p>This is a living world in a single file. The file you opened <em>is</em> the world — there is no server, no account, no internet.</p>' +
@@ -413,6 +527,38 @@
         '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
     }
     return '<div class="modal-veil" id="veil"><div class="modal" role="dialog" aria-modal="true">' + inner + '</div></div>';
+  }
+
+  /* ---------- the shelf of worlds ---------- */
+
+  function listStoredWorlds() {
+    var worlds = [];
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var key = localStorage.key(i);
+        if (key.indexOf(STORE_PREFIX) !== 0) continue;
+        var w = JSON.parse(localStorage.getItem(key));
+        if (!W.looksLikeWorld(w)) continue;
+        worlds.push({
+          id: w.id, name: w.name, touched: w.touched || 0,
+          kith: Object.keys(w.kith || {}).length,
+          plants: Object.keys(w.plants).length
+        });
+      }
+    } catch (e) { /* a corrupt entry hides itself */ }
+    worlds.sort(function (a, b) { return b.touched - a.touched; });
+    return worlds;
+  }
+
+  function switchToWorld(worldState) {
+    state = worldState;
+    W.ensureKith(state);
+    W.settleImmigrants(state);
+    W.advanceGrowth(state);
+    save();
+    selected = null;
+    openModal = null;
+    render();
   }
 
   /* ---------- the self-writing file ---------- */
@@ -535,10 +681,16 @@
           preserveWorld();
           render();
           toast('World preserved. The file you just downloaded IS your world — share copies freely.');
-        } else if (act === 'merge' || act === 'chronicle' || act === 'about') {
+        } else if (act === 'merge' || act === 'chronicle' || act === 'about' || act === 'worlds') {
           openModal = act; render();
         } else if (act === 'close-modal') {
           openModal = null; render();
+        } else if (act === 'new-world') {
+          var newName = (document.getElementById('nw-name').value || '').trim();
+          var temperament = document.getElementById('nw-temp').value;
+          var fresh = W.newWorld({ name: newName || null, temperament: temperament });
+          switchToWorld(fresh);
+          toast('The world ' + state.name + ' came into being. Three kith are already exploring it.');
         } else if (act === 'merge-paste-go') {
           handleIncomingWorld(document.getElementById('merge-paste').value);
         } else if (act === 'export-world') {
@@ -547,6 +699,38 @@
           box.select();
           try { document.execCommand('copy'); toast('World copied — paste it into another Driftgarden.'); }
           catch (e) { toast('World placed in the box — copy it by hand.'); }
+        }
+      });
+    });
+
+    stage.querySelectorAll('[data-world-visit]').forEach(function (node) {
+      node.addEventListener('click', function () {
+        try {
+          var w = JSON.parse(localStorage.getItem(STORE_PREFIX + node.getAttribute('data-world-visit')));
+          if (W.looksLikeWorld(w)) { switchToWorld(w); toast('You return to ' + state.name + '.'); }
+        } catch (e) { toast('That world could not be woken.'); }
+      });
+    });
+    stage.querySelectorAll('[data-world-forget]').forEach(function (node) {
+      node.addEventListener('click', function () {
+        var id = node.getAttribute('data-world-forget');
+        var entry = listStoredWorlds().filter(function (w) { return w.id === id; })[0];
+        var name = entry ? entry.name : 'this world';
+        if (!confirm('Let go of ' + name + '? Its life here ends — though any file you preserved of it lives on, and could return one day.')) return;
+        try { localStorage.removeItem(STORE_PREFIX + id); } catch (e) { /* already gone */ }
+        if (id === state.id) {
+          var remaining = listStoredWorlds();
+          if (remaining.length > 0) {
+            switchToWorld(JSON.parse(localStorage.getItem(STORE_PREFIX + remaining[0].id)));
+            toast(name + ' was let go. You find yourself in ' + state.name + '.');
+          } else {
+            switchToWorld(W.newWorld());
+            toast(name + ' was let go. A new world, ' + state.name + ', begins.');
+          }
+        } else {
+          openModal = 'worlds';
+          render();
+          toast(name + ' was let go.');
         }
       });
     });
@@ -598,11 +782,12 @@
     if (!openModal) updateKithLayer();
   }, KITH_TICK_MS);
 
-  // The world endures: growth advances and is saved twice a minute.
+  // The world endures: growth advances, skies turn, twice a minute.
   setInterval(function () {
     W.advanceGrowth(state);
+    var wx = W.weatherTick(state); // chronicles storms exactly once
     save();
-    if (!openModal && !selected) render();
+    if (!openModal && (wx.kind !== lastWxKind || !selected)) render();
   }, 30000);
 
   /* ---------- boot ---------- */
