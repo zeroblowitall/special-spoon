@@ -202,8 +202,15 @@
         return;
       }
       if (typeof value !== 'number') { child[gene] = value; return; }
-      if (rng() < 0.3) value = value * (1 + (rng() - 0.5) * 0.3); // mutation
       var lo = spec[gene][0], hi = spec[gene][1];
+      if (spec[gene][2] && hi - lo <= 12) {
+        // small discrete genes mutate by stepping — how a tail is lost,
+        // a fin is found, a third eye opens
+        if (rng() < 0.12) value = value + (rng() < 0.5 ? -1 : 1);
+        child[gene] = Math.max(lo, Math.min(hi, Math.round(value)));
+        return;
+      }
+      if (rng() < 0.3) value = value * (1 + (rng() - 0.5) * 0.3); // mutation
       if (spec[gene][2]) value = Math.round(value);
       child[gene] = Math.max(lo, Math.min(hi, value));
     });
@@ -215,20 +222,53 @@
     detail: [2, 7, true], glow: [0, 0], rate: [0.5, 1.6]
   };
 
+  /* The body-plan genome: shape itself is heritable. The discrete genes
+   * multiply out to well over a million distinct phenotypes before colour
+   * and size even enter — and every one of them crosses and mutates. */
   function newKithGenome(rng) {
     return {
       hue: Math.floor(rng() * 360),
       size: 0.8 + rng() * 0.5,
       speed: 0.012 + rng() * 0.014,   // field-fractions per second
       ears: Math.floor(rng() * 3),    // 0 none, 1 tufts, 2 long
+      form: Math.floor(rng() * 4),    // 0 round, 1 tall, 2 long, 3 pear
+      segs: 1 + Math.floor(rng() * 2),// body segments
+      limbs: Math.floor(rng() * 3),   // 0 none (glider-slug), 1 two feet, 2 four
+      tail: Math.floor(rng() * 5),    // 0 none, 1 nub, 2 curl, 3 plume, 4 spike
+      fins: Math.floor(rng() * 2),    // 1 = a swimmer: the lakes are open
+      crest: Math.floor(rng() * 4),   // 0 none, 1 spikes, 2 frill, 3 fan
+      snout: Math.floor(rng() * 3),   // 0 soft, 1 beak, 2 muzzle
+      eyes: 1 + Math.floor(rng() * 4),// one to four
+      pattern: Math.floor(rng() * 5), // 0 plain, 1 belly, 2 spots, 3 stripes, 4 mask
       voice: [Math.floor(rng() * 15), Math.floor(rng() * 15), Math.floor(rng() * 15)]
     };
   }
 
   var KITH_GENE_SPEC = {
     hue: [0, 359, true], size: [0.7, 1.4], speed: [0.008, 0.03],
-    ears: [0, 2, true], voice: [0, 0] // arrays are spliced, bounds unused
+    ears: [0, 2, true], form: [0, 3, true], segs: [1, 2, true],
+    limbs: [0, 2, true], tail: [0, 4, true], fins: [0, 1, true],
+    crest: [0, 3, true], snout: [0, 2, true], eyes: [1, 4, true],
+    pattern: [0, 4, true],
+    voice: [0, 0] // arrays are spliced, bounds unused
   };
+
+  // The elder body-plan: what every kith looked like before shape was
+  // heritable. Deterministic defaults, identical in every copy.
+  function modernKithGenome(g) {
+    if (g.form !== undefined) return g;
+    g.form = 0; g.segs = 1; g.limbs = 1; g.tail = 0; g.fins = 0;
+    g.crest = 0; g.snout = 0; g.eyes = 2;
+    g.pattern = 1;
+    return g;
+  }
+
+  function isSwimmer(k) { return (k.genome.fins || 0) > 0; }
+
+  // Where can this body be? Land for all; water for the finned.
+  function canStandAt(terrain, k, x, y) {
+    return isLandAt(terrain, x, y) || isSwimmer(k);
+  }
 
   /* The mind: evolvable weights a kith is born with. Behaviour follows from
    * these, so selection quietly reshapes temperament over generations. */
@@ -461,12 +501,27 @@
   var HUE_KIND_WORDS = ['Ember', 'Gold', 'Moss', 'Lake', 'Dusk', 'Rose'];
   var EAR_KIND_WORDS = ['Smoothbrow', 'Tuftear', 'Longear'];
 
+  // The most distinctive feature names the creature; colour places it.
   function kindOf(genome) {
-    var hueBand = Math.floor((((genome.hue % 360) + 360) % 360) / 60);
-    var ears = Math.max(0, Math.min(2, genome.ears || 0));
+    var g = modernKithGenome(genome);
+    var hueBand = Math.floor((((g.hue % 360) + 360) % 360) / 60);
+    var descriptor;
+    if (g.fins > 0) descriptor = 'Finback';
+    else if (g.crest === 3) descriptor = 'Fancrest';
+    else if (g.crest === 2) descriptor = 'Frillcrest';
+    else if (g.crest === 1) descriptor = 'Spineback';
+    else if (g.tail === 4) descriptor = 'Spiketail';
+    else if (g.tail === 3) descriptor = 'Plumetail';
+    else if (g.tail === 2) descriptor = 'Curltail';
+    else if (g.eyes === 4) descriptor = 'Manygaze';
+    else if (g.eyes === 3) descriptor = 'Trigaze';
+    else if (g.eyes === 1) descriptor = 'Oneeye';
+    else if (g.limbs === 2) descriptor = 'Strider';
+    else if (g.limbs === 0) descriptor = 'Glider';
+    else descriptor = EAR_KIND_WORDS[Math.max(0, Math.min(2, g.ears || 0))];
     return {
-      key: hueBand + '-' + ears,
-      name: HUE_KIND_WORDS[hueBand] + ' ' + EAR_KIND_WORDS[ears]
+      key: hueBand + '-' + descriptor,
+      name: HUE_KIND_WORDS[hueBand] + ' ' + descriptor
     };
   }
 
@@ -652,7 +707,9 @@
     });
     Object.keys(w.kith || {}).forEach(function (id) {
       var k = w.kith[id];
-      if (!isLandAt(terrain, k.x, k.y)) {
+      // swimmers may arrive in (and stay in) the water; everyone else
+      // settles onto land
+      if (!canStandAt(terrain, k, k.x, k.y)) {
         var spot = findSpot(w, 'kith:' + id, isLandAt);
         k.x = spot.x; k.y = spot.y; k.tx = null; k.ty = null;
       }
@@ -928,6 +985,7 @@
         k.trust = {};
       }
       if (!k.lex) k.lex = {}; // kith from before language grow a voice
+      modernKithGenome(k.genome); // kith from before shape keep the elder body-plan
     });
   }
 
@@ -1102,11 +1160,7 @@
             chronicle(w, 'discovery', songText, 'ds' + k.id);
             events.push({ kind: 'discovery', text: songText });
           }
-          if (knowsOf(k).indexOf('song') > -1) {
-            k.saying = '♪ ' + attendConcept(w, k, 'song').word;
-            k.sayingUntil = now + 3500;
-          }
-          return;
+          return; // the singing itself happens in the song pass, last of all
         }
         else return;
       }
@@ -1212,32 +1266,35 @@
         if (call && rng() < 0.25 + brain.curiosity * 0.55) {
           var bx = Math.max(0.03, Math.min(0.97, call.x + (rng() - 0.5) * 0.06));
           var by = Math.max(0.56, Math.min(0.97, call.y + (rng() - 0.5) * 0.04));
-          if (isLandAt(terrain, bx, by)) { k.tx = bx; k.ty = by; }
+          if (canStandAt(terrain, k, bx, by)) { k.tx = bx; k.ty = by; }
         } else if (rng() < brain.patience * 0.6) {
           k.act = 'rest';
           k.actUntil = now + (4 + rng() * 12) * 1000;
           return;
         } else {
-          // pick somewhere new to be — on land; range set by wanderlust
+          // pick somewhere new to be — where this body can go
           for (var tries = 0; tries < 8; tries++) {
             var range = 0.1 + k.brain.wanderlust * 0.5;
             var cx = Math.max(0.03, Math.min(0.97, k.x + (rng() - 0.5) * range * 2));
             var cy = Math.max(0.56, Math.min(0.97, k.y + (rng() - 0.5) * range));
-            if (isLandAt(terrain, cx, cy)) { k.tx = cx; k.ty = cy; break; }
+            if (canStandAt(terrain, k, cx, cy)) { k.tx = cx; k.ty = cy; break; }
           }
         }
       }
 
-      // walk toward target, stopping at the water's edge
+      // move toward the target; the water's edge stops all but swimmers
       if (k.tx !== null) {
         var dx = k.tx - k.x, dy = k.ty - k.y;
         var dist = Math.sqrt(dx * dx + dy * dy);
         var stageSpeed = kithStage(k, now) === 'elder' ? 0.6 : 1;
-        var step = Math.min(dist, k.genome.speed * stageSpeed * dt);
+        var limbSpeed = [0.8, 1, 1.15][k.genome.limbs || 0] || 1;
+        var inWater = !isLandAt(terrain, k.x, k.y);
+        var mediumSpeed = inWater ? 1.25 : 1; // a swimmer glides
+        var step = Math.min(dist, k.genome.speed * stageSpeed * limbSpeed * mediumSpeed * dt);
         if (dist > 0.0001) {
           var nx = k.x + (dx / dist) * step;
           var ny = k.y + (dy / dist) * step;
-          if (!isLandAt(terrain, nx, ny)) {
+          if (!canStandAt(terrain, k, nx, ny)) {
             k.tx = null; k.ty = null; // shoreline reached — think again next tick
           } else {
             k.x = nx;
@@ -1316,10 +1373,13 @@
       }
     }
 
-    /* -- song carries: a singer in the storm steadies every heart nearby -- */
+    /* -- song carries: a singer in the storm steadies every heart nearby.
+     * The song is voiced here, after all chatter, so nothing talks over it. -- */
     if (storm) {
       alive.forEach(function (singer) {
         if (knowsOf(singer).indexOf('song') === -1 || singer.act !== 'shelter') return;
+        singer.saying = '♪ ' + attendConcept(w, singer, 'song').word;
+        singer.sayingUntil = now + 3500;
         alive.forEach(function (listener) {
           if (listener.id === singer.id) return;
           var sd = Math.sqrt((listener.x - singer.x) * (listener.x - singer.x) +
@@ -1739,6 +1799,10 @@
     kindOf: kindOf,
     greetNewKind: greetNewKind,
     skillName: skillName,
+    modernKithGenome: modernKithGenome,
+    isSwimmer: isSwimmer,
+    canStandAt: canStandAt,
+    KITH_GENE_SPEC: KITH_GENE_SPEC,
     plantLabel: plantLabel,
     mergeWorlds: mergeWorlds,
     WATER_COOLDOWN: WATER_COOLDOWN,

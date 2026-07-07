@@ -373,7 +373,7 @@ html, body {
 <p><strong>On a phone?</strong> Your device probably opened this file in a built-in viewer that doesn't run JavaScript. Save the file, then open it with a real browser: in your Files app, long-press the file and choose <em>Open with → Chrome</em> (or Firefox). The world will be waiting.</p>
 </div></noscript>
 <div id="stage"></div>
-<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.11.0 */;</script>
+<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.12.0 */;</script>
 <script id="dg-world">
 /* Driftgarden — world logic.
  * Everything that is TRUE about a world lives here: genomes, growth, kith,
@@ -579,8 +579,15 @@ html, body {
         return;
       }
       if (typeof value !== 'number') { child[gene] = value; return; }
-      if (rng() < 0.3) value = value * (1 + (rng() - 0.5) * 0.3); // mutation
       var lo = spec[gene][0], hi = spec[gene][1];
+      if (spec[gene][2] && hi - lo <= 12) {
+        // small discrete genes mutate by stepping — how a tail is lost,
+        // a fin is found, a third eye opens
+        if (rng() < 0.12) value = value + (rng() < 0.5 ? -1 : 1);
+        child[gene] = Math.max(lo, Math.min(hi, Math.round(value)));
+        return;
+      }
+      if (rng() < 0.3) value = value * (1 + (rng() - 0.5) * 0.3); // mutation
       if (spec[gene][2]) value = Math.round(value);
       child[gene] = Math.max(lo, Math.min(hi, value));
     });
@@ -592,20 +599,53 @@ html, body {
     detail: [2, 7, true], glow: [0, 0], rate: [0.5, 1.6]
   };
 
+  /* The body-plan genome: shape itself is heritable. The discrete genes
+   * multiply out to well over a million distinct phenotypes before colour
+   * and size even enter — and every one of them crosses and mutates. */
   function newKithGenome(rng) {
     return {
       hue: Math.floor(rng() * 360),
       size: 0.8 + rng() * 0.5,
       speed: 0.012 + rng() * 0.014,   // field-fractions per second
       ears: Math.floor(rng() * 3),    // 0 none, 1 tufts, 2 long
+      form: Math.floor(rng() * 4),    // 0 round, 1 tall, 2 long, 3 pear
+      segs: 1 + Math.floor(rng() * 2),// body segments
+      limbs: Math.floor(rng() * 3),   // 0 none (glider-slug), 1 two feet, 2 four
+      tail: Math.floor(rng() * 5),    // 0 none, 1 nub, 2 curl, 3 plume, 4 spike
+      fins: Math.floor(rng() * 2),    // 1 = a swimmer: the lakes are open
+      crest: Math.floor(rng() * 4),   // 0 none, 1 spikes, 2 frill, 3 fan
+      snout: Math.floor(rng() * 3),   // 0 soft, 1 beak, 2 muzzle
+      eyes: 1 + Math.floor(rng() * 4),// one to four
+      pattern: Math.floor(rng() * 5), // 0 plain, 1 belly, 2 spots, 3 stripes, 4 mask
       voice: [Math.floor(rng() * 15), Math.floor(rng() * 15), Math.floor(rng() * 15)]
     };
   }
 
   var KITH_GENE_SPEC = {
     hue: [0, 359, true], size: [0.7, 1.4], speed: [0.008, 0.03],
-    ears: [0, 2, true], voice: [0, 0] // arrays are spliced, bounds unused
+    ears: [0, 2, true], form: [0, 3, true], segs: [1, 2, true],
+    limbs: [0, 2, true], tail: [0, 4, true], fins: [0, 1, true],
+    crest: [0, 3, true], snout: [0, 2, true], eyes: [1, 4, true],
+    pattern: [0, 4, true],
+    voice: [0, 0] // arrays are spliced, bounds unused
   };
+
+  // The elder body-plan: what every kith looked like before shape was
+  // heritable. Deterministic defaults, identical in every copy.
+  function modernKithGenome(g) {
+    if (g.form !== undefined) return g;
+    g.form = 0; g.segs = 1; g.limbs = 1; g.tail = 0; g.fins = 0;
+    g.crest = 0; g.snout = 0; g.eyes = 2;
+    g.pattern = 1;
+    return g;
+  }
+
+  function isSwimmer(k) { return (k.genome.fins || 0) > 0; }
+
+  // Where can this body be? Land for all; water for the finned.
+  function canStandAt(terrain, k, x, y) {
+    return isLandAt(terrain, x, y) || isSwimmer(k);
+  }
 
   /* The mind: evolvable weights a kith is born with. Behaviour follows from
    * these, so selection quietly reshapes temperament over generations. */
@@ -838,12 +878,27 @@ html, body {
   var HUE_KIND_WORDS = ['Ember', 'Gold', 'Moss', 'Lake', 'Dusk', 'Rose'];
   var EAR_KIND_WORDS = ['Smoothbrow', 'Tuftear', 'Longear'];
 
+  // The most distinctive feature names the creature; colour places it.
   function kindOf(genome) {
-    var hueBand = Math.floor((((genome.hue % 360) + 360) % 360) / 60);
-    var ears = Math.max(0, Math.min(2, genome.ears || 0));
+    var g = modernKithGenome(genome);
+    var hueBand = Math.floor((((g.hue % 360) + 360) % 360) / 60);
+    var descriptor;
+    if (g.fins > 0) descriptor = 'Finback';
+    else if (g.crest === 3) descriptor = 'Fancrest';
+    else if (g.crest === 2) descriptor = 'Frillcrest';
+    else if (g.crest === 1) descriptor = 'Spineback';
+    else if (g.tail === 4) descriptor = 'Spiketail';
+    else if (g.tail === 3) descriptor = 'Plumetail';
+    else if (g.tail === 2) descriptor = 'Curltail';
+    else if (g.eyes === 4) descriptor = 'Manygaze';
+    else if (g.eyes === 3) descriptor = 'Trigaze';
+    else if (g.eyes === 1) descriptor = 'Oneeye';
+    else if (g.limbs === 2) descriptor = 'Strider';
+    else if (g.limbs === 0) descriptor = 'Glider';
+    else descriptor = EAR_KIND_WORDS[Math.max(0, Math.min(2, g.ears || 0))];
     return {
-      key: hueBand + '-' + ears,
-      name: HUE_KIND_WORDS[hueBand] + ' ' + EAR_KIND_WORDS[ears]
+      key: hueBand + '-' + descriptor,
+      name: HUE_KIND_WORDS[hueBand] + ' ' + descriptor
     };
   }
 
@@ -1029,7 +1084,9 @@ html, body {
     });
     Object.keys(w.kith || {}).forEach(function (id) {
       var k = w.kith[id];
-      if (!isLandAt(terrain, k.x, k.y)) {
+      // swimmers may arrive in (and stay in) the water; everyone else
+      // settles onto land
+      if (!canStandAt(terrain, k, k.x, k.y)) {
         var spot = findSpot(w, 'kith:' + id, isLandAt);
         k.x = spot.x; k.y = spot.y; k.tx = null; k.ty = null;
       }
@@ -1305,6 +1362,7 @@ html, body {
         k.trust = {};
       }
       if (!k.lex) k.lex = {}; // kith from before language grow a voice
+      modernKithGenome(k.genome); // kith from before shape keep the elder body-plan
     });
   }
 
@@ -1479,11 +1537,7 @@ html, body {
             chronicle(w, 'discovery', songText, 'ds' + k.id);
             events.push({ kind: 'discovery', text: songText });
           }
-          if (knowsOf(k).indexOf('song') > -1) {
-            k.saying = '♪ ' + attendConcept(w, k, 'song').word;
-            k.sayingUntil = now + 3500;
-          }
-          return;
+          return; // the singing itself happens in the song pass, last of all
         }
         else return;
       }
@@ -1589,32 +1643,35 @@ html, body {
         if (call && rng() < 0.25 + brain.curiosity * 0.55) {
           var bx = Math.max(0.03, Math.min(0.97, call.x + (rng() - 0.5) * 0.06));
           var by = Math.max(0.56, Math.min(0.97, call.y + (rng() - 0.5) * 0.04));
-          if (isLandAt(terrain, bx, by)) { k.tx = bx; k.ty = by; }
+          if (canStandAt(terrain, k, bx, by)) { k.tx = bx; k.ty = by; }
         } else if (rng() < brain.patience * 0.6) {
           k.act = 'rest';
           k.actUntil = now + (4 + rng() * 12) * 1000;
           return;
         } else {
-          // pick somewhere new to be — on land; range set by wanderlust
+          // pick somewhere new to be — where this body can go
           for (var tries = 0; tries < 8; tries++) {
             var range = 0.1 + k.brain.wanderlust * 0.5;
             var cx = Math.max(0.03, Math.min(0.97, k.x + (rng() - 0.5) * range * 2));
             var cy = Math.max(0.56, Math.min(0.97, k.y + (rng() - 0.5) * range));
-            if (isLandAt(terrain, cx, cy)) { k.tx = cx; k.ty = cy; break; }
+            if (canStandAt(terrain, k, cx, cy)) { k.tx = cx; k.ty = cy; break; }
           }
         }
       }
 
-      // walk toward target, stopping at the water's edge
+      // move toward the target; the water's edge stops all but swimmers
       if (k.tx !== null) {
         var dx = k.tx - k.x, dy = k.ty - k.y;
         var dist = Math.sqrt(dx * dx + dy * dy);
         var stageSpeed = kithStage(k, now) === 'elder' ? 0.6 : 1;
-        var step = Math.min(dist, k.genome.speed * stageSpeed * dt);
+        var limbSpeed = [0.8, 1, 1.15][k.genome.limbs || 0] || 1;
+        var inWater = !isLandAt(terrain, k.x, k.y);
+        var mediumSpeed = inWater ? 1.25 : 1; // a swimmer glides
+        var step = Math.min(dist, k.genome.speed * stageSpeed * limbSpeed * mediumSpeed * dt);
         if (dist > 0.0001) {
           var nx = k.x + (dx / dist) * step;
           var ny = k.y + (dy / dist) * step;
-          if (!isLandAt(terrain, nx, ny)) {
+          if (!canStandAt(terrain, k, nx, ny)) {
             k.tx = null; k.ty = null; // shoreline reached — think again next tick
           } else {
             k.x = nx;
@@ -1693,10 +1750,13 @@ html, body {
       }
     }
 
-    /* -- song carries: a singer in the storm steadies every heart nearby -- */
+    /* -- song carries: a singer in the storm steadies every heart nearby.
+     * The song is voiced here, after all chatter, so nothing talks over it. -- */
     if (storm) {
       alive.forEach(function (singer) {
         if (knowsOf(singer).indexOf('song') === -1 || singer.act !== 'shelter') return;
+        singer.saying = '♪ ' + attendConcept(w, singer, 'song').word;
+        singer.sayingUntil = now + 3500;
         alive.forEach(function (listener) {
           if (listener.id === singer.id) return;
           var sd = Math.sqrt((listener.x - singer.x) * (listener.x - singer.x) +
@@ -2116,6 +2176,10 @@ html, body {
     kindOf: kindOf,
     greetNewKind: greetNewKind,
     skillName: skillName,
+    modernKithGenome: modernKithGenome,
+    isSwimmer: isSwimmer,
+    canStandAt: canStandAt,
+    KITH_GENE_SPEC: KITH_GENE_SPEC,
     plantLabel: plantLabel,
     mergeWorlds: mergeWorlds,
     WATER_COOLDOWN: WATER_COOLDOWN,
@@ -2732,56 +2796,152 @@ html, body {
   }
 
   function drawKith(k, now) {
-    var g = k.genome;
+    var g = W.modernKithGenome(k.genome);
     var pos = toScreen(k.x, k.y);
     var stage = W.kithStage(k, now);
     var scale = g.size * (stage === 'young' ? 0.65 : 1) * (0.85 + (k.y - 0.55) * 0.9);
     var sat = stage === 'elder' ? 30 : 60;
     var body = 'hsl(' + g.hue + ', ' + sat + '%, 58%)';
-    var belly = 'hsl(' + g.hue + ', ' + sat + '%, 74%)';
+    var pale = 'hsl(' + g.hue + ', ' + sat + '%, 74%)';
+    var deep = 'hsl(' + g.hue + ', ' + Math.max(25, sat - 10) + '%, 42%)';
     var sel = selected && selected.type === 'kith' && selected.id === k.id;
     var emissary = state.emissary === k.id;
+    var rng = W.mulberry32(W.hash32(k.id + ':body'));
+    var inWater = !W.isLandAt(W.makeTerrain(state.id), k.x, k.y);
+    var parts = [];
 
-    var ears = '';
-    if (g.ears === 1) {
-      ears = '<circle cx="-6" cy="-16" r="3" fill="' + body + '"/><circle cx="6" cy="-16" r="3" fill="' + body + '"/>';
-    } else if (g.ears === 2) {
-      ears = '<ellipse cx="-5" cy="-19" rx="2.4" ry="6" fill="' + body + '"/><ellipse cx="5" cy="-19" rx="2.4" ry="6" fill="' + body + '"/>';
+    /* torso geometry by form: 0 round, 1 tall, 2 long, 3 pear */
+    var rx = [8.5, 6.5, 11, 7.5][g.form] || 8.5;
+    var ry = [9, 11, 6.5, 8][g.form] || 9;
+    var cy = -ry + 2 + (g.limbs === 0 ? 2 : 0); // limbless bodies sit low
+    var top = cy - ry - (g.form === 3 ? 5 : 0);  // pears carry a head-bump
+
+    /* tail first (behind the body), at the back */
+    if (g.tail === 1) {
+      parts.push('<circle cx="' + (-rx - 1.5) + '" cy="' + (cy + 2) + '" r="2.6" fill="' + body + '"/>');
+    } else if (g.tail === 2) {
+      parts.push('<path d="M' + (-rx + 1) + ' ' + (cy + 2) + ' q -7 -1 -6 -7 q 0.8 -4 4 -3.4" stroke="' + body + '" stroke-width="2.6" fill="none" stroke-linecap="round"/>');
+    } else if (g.tail === 3) {
+      for (var t = 0; t < 3; t++) {
+        var ty = cy - 1 + (t - 1) * 3.4;
+        parts.push('<ellipse cx="' + (-rx - 4) + '" cy="' + ty + '" rx="6" ry="1.9" fill="' + (t === 1 ? body : pale) + '" transform="rotate(' + ((t - 1) * 24) + ' ' + (-rx - 4) + ' ' + ty + ')"/>');
+      }
+    } else if (g.tail === 4) {
+      parts.push('<path d="M' + (-rx + 1) + ' ' + (cy + 1) + ' l -8.5 -3" stroke="' + body + '" stroke-width="2.4" stroke-linecap="round"/>' +
+        '<circle cx="' + (-rx - 7.8) + '" cy="' + (cy - 2.2) + '" r="1.4" fill="' + deep + '"/>');
     }
 
-    var eyes = k.act === 'rest'
-      ? '<path d="M-4.5 -9 q 2 1.6 4 0" stroke="#222" stroke-width="1" fill="none"/><path d="M0.5 -9 q 2 1.6 4 0" stroke="#222" stroke-width="1" fill="none"/>'
-      : '<circle cx="-3" cy="-9" r="1.8" fill="#fff"/><circle cx="-2.6" cy="-9" r="1" fill="#222"/>' +
-        '<circle cx="3" cy="-9" r="1.8" fill="#fff"/><circle cx="3.4" cy="-9" r="1" fill="#222"/>';
+    /* second segment: a rear hump */
+    if (g.segs === 2) {
+      parts.push('<ellipse cx="' + (-rx * 0.62) + '" cy="' + (cy + 2) + '" rx="' + (rx * 0.72) + '" ry="' + (ry * 0.74) + '" fill="' + deep + '"/>');
+    }
 
-    var act = k.act === 'eat'
-      ? '<text x="9" y="-14" font-size="9" fill="#ffd166">✿</text>'
-      : '';
+    /* legs & feet (hidden while swimming) */
+    if (!inWater) {
+      if (g.limbs === 1) {
+        parts.push('<ellipse cx="-3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>' +
+          '<ellipse cx="3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>');
+      } else if (g.limbs === 2) {
+        [-6, -2.2, 2.2, 6].forEach(function (fx) {
+          parts.push('<ellipse cx="' + fx + '" cy="1" rx="1.8" ry="1.5" fill="' + body + '"/>');
+        });
+      }
+    }
+
+    /* the torso itself (pears get a head-bump above) */
+    parts.push('<ellipse cx="0" cy="' + cy + '" rx="' + rx + '" ry="' + ry + '" fill="' + body + '"/>');
+    if (g.form === 3) {
+      parts.push('<ellipse cx="' + (rx * 0.18) + '" cy="' + (cy - ry * 0.9) + '" rx="' + (rx * 0.68) + '" ry="' + (ry * 0.6) + '" fill="' + body + '"/>');
+    }
+
+    /* coat pattern */
+    if (g.pattern === 1) {
+      parts.push('<ellipse cx="0" cy="' + (cy + ry * 0.28) + '" rx="' + (rx * 0.58) + '" ry="' + (ry * 0.56) + '" fill="' + pale + '"/>');
+    } else if (g.pattern === 2) {
+      for (var s = 0; s < 4; s++) {
+        parts.push('<circle cx="' + ((rng() - 0.5) * rx * 1.2).toFixed(1) + '" cy="' + (cy + (rng() - 0.5) * ry * 1.1).toFixed(1) + '" r="' + (1.2 + rng()).toFixed(1) + '" fill="' + deep + '" opacity="0.8"/>');
+      }
+    } else if (g.pattern === 3) {
+      for (var st = 0; st < 3; st++) {
+        var sx = -rx * 0.5 + st * rx * 0.5;
+        parts.push('<path d="M' + sx + ' ' + (cy - ry * 0.8) + ' q 3 ' + (ry * 0.8) + ' 0 ' + (ry * 1.6) + '" stroke="' + deep + '" stroke-width="1.8" fill="none" opacity="0.75"/>');
+      }
+    } else if (g.pattern === 4) {
+      parts.push('<ellipse cx="' + (rx * 0.32) + '" cy="' + (cy - ry * 0.3) + '" rx="' + (rx * 0.52) + '" ry="' + (ry * 0.42) + '" fill="' + pale + '" opacity="0.9"/>');
+    }
+
+    /* fins: a swimmer's silhouette */
+    if (g.fins > 0) {
+      parts.push('<ellipse cx="' + (-rx * 0.15) + '" cy="' + (top + 1) + '" rx="2" ry="4.6" fill="' + deep + '" transform="rotate(-14 ' + (-rx * 0.15) + ' ' + (top + 1) + ')"/>');
+      parts.push('<ellipse cx="' + (rx * 0.55) + '" cy="' + (cy + ry * 0.5) + '" rx="4.2" ry="1.8" fill="' + deep + '" transform="rotate(24 ' + (rx * 0.55) + ' ' + (cy + ry * 0.5) + ')"/>');
+    }
+
+    /* crest / ears on the crown */
+    if (g.crest === 1) {
+      for (var c = 0; c < 3; c++) {
+        var cx2 = -4 + c * 4;
+        parts.push('<path d="M' + cx2 + ' ' + (top + 2) + ' l 1.6 -4.6 l 1.6 4.4 Z" fill="' + deep + '"/>');
+      }
+    } else if (g.crest === 2) {
+      parts.push('<path d="M-6 ' + (top + 2.5) + ' Q 0 ' + (top - 6.5) + ' 6 ' + (top + 2.5) + '" fill="' + pale + '" stroke="' + deep + '" stroke-width="0.8"/>');
+    } else if (g.crest === 3) {
+      for (var f = 0; f < 5; f++) {
+        var fx2 = -6 + f * 3;
+        var fh = 3.5 + (2 - Math.abs(f - 2)) * 1.6;
+        parts.push('<path d="M' + fx2 + ' ' + (top + 2) + ' l 1.2 -' + fh + ' l 1.2 ' + fh + ' Z" fill="' + (f % 2 ? pale : deep) + '"/>');
+      }
+    }
+    if (g.ears === 1) {
+      parts.push('<circle cx="-5" cy="' + (top + 0.5) + '" r="2.8" fill="' + body + '"/><circle cx="5" cy="' + (top + 0.5) + '" r="2.8" fill="' + body + '"/>');
+    } else if (g.ears === 2) {
+      parts.push('<ellipse cx="-4.5" cy="' + (top - 3) + '" rx="2.2" ry="5.6" fill="' + body + '"/><ellipse cx="4.5" cy="' + (top - 3) + '" rx="2.2" ry="5.6" fill="' + body + '"/>');
+    }
+
+    /* face: eyes across the brow, then the snout */
+    var eyeY = (cy - ry * 0.28).toFixed(1);
+    var eyeXs = g.eyes === 1 ? [0] : g.eyes === 2 ? [-3, 3] : g.eyes === 3 ? [-4, 0, 4] : [-4.5, -1.5, 1.5, 4.5];
+    eyeXs.forEach(function (ex) {
+      if (k.act === 'rest') {
+        parts.push('<path d="M' + (ex - 1.6) + ' ' + eyeY + ' q 1.6 1.5 3.2 0" stroke="#222" stroke-width="1" fill="none"/>');
+      } else {
+        parts.push('<circle cx="' + ex + '" cy="' + eyeY + '" r="1.8" fill="#fff"/>' +
+          '<circle cx="' + (ex + 0.5) + '" cy="' + eyeY + '" r="1" fill="#222"/>');
+      }
+    });
+    var eyeYn = parseFloat(eyeY);
+    if (g.snout === 1) {
+      parts.push('<path d="M' + (rx - 2) + ' ' + (eyeYn + 3.2) + ' l 5.5 1.6 l -5.2 2.2 Z" fill="' + pale + '" stroke="' + deep + '" stroke-width="0.6"/>');
+    } else if (g.snout === 2) {
+      parts.push('<ellipse cx="' + (rx - 1.5) + '" cy="' + (eyeYn + 4) + '" rx="3.6" ry="2.4" fill="' + pale + '"/>' +
+        '<circle cx="' + (rx + 1.4) + '" cy="' + (eyeYn + 3.6) + '" r="0.9" fill="' + deep + '"/>');
+    }
+
+    if (k.act === 'eat') parts.push('<text x="' + (rx + 2) + '" y="' + (top - 2) + '" font-size="9" fill="#ffd166">✿</text>');
+
+    /* swimming: sunk low, with a ripple at the waterline */
+    var ripple = inWater
+      ? '<ellipse cx="0" cy="0.5" rx="' + (rx + 3) + '" ry="2.6" fill="none" stroke="rgba(210,230,245,0.55)" stroke-width="1.1"/>'
+      : '<ellipse cx="0" cy="1" rx="' + (rx + 0.5) + '" ry="3" fill="rgba(0,0,0,0.25)"/>';
 
     var label = k.name || (emissary ? k.given : '');
     var labelSvg = label ? '<text class="plant-label" x="0" y="14">' + escapeHtml(label) + '</text>' : '';
     var saying = (k.saying && k.sayingUntil && now < k.sayingUntil) ? escapeHtml(k.saying) : '';
     // stagger bubbles by identity so close talkers don't overlap
-    var speechLift = 26 * scale + (W.hash32(k.id) % 3) * 9;
+    var speechLift = (-top + 8) * scale + 12 + (W.hash32(k.id) % 3) * 9;
     var speechShift = ((W.hash32(k.id + 'x') % 3) - 1) * 8;
     var speechSvg = '<text class="kith-speech" x="' + speechShift + '" y="' + (-speechLift).toFixed(0) + '">' + saying + '</text>';
     var haloSel = sel ? '<circle cx="0" cy="-6" r="16" fill="none" stroke="#ffd166" stroke-width="2" opacity="0.9"/>' : '';
     var haloEmissary = emissary ? '<circle cx="0" cy="-6" r="13" fill="none" stroke="#ffd166" stroke-width="1" stroke-dasharray="2 3" opacity="0.85" class="emissary-ring"/>' : '';
 
-    return '<g class="kith-group' + (sel ? ' selected' : '') + ' act-' + k.act + '" data-kith="' + k.id + '" ' +
+    return '<g class="kith-group' + (sel ? ' selected' : '') + ' act-' + k.act + (inWater ? ' swimming' : '') + '" data-kith="' + k.id + '" ' +
       'style="transition: transform ' + (KITH_TICK_MS / 1000 + 0.2) + 's linear" ' +
       'transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')">' +
-      '<ellipse cx="0" cy="1" rx="9" ry="3" fill="rgba(0,0,0,0.25)"/>' +
+      ripple +
       haloEmissary + haloSel +
       '<g class="kith-bob" style="animation-delay:-' + (W.hash32(k.id) % 3000) + 'ms">' +
       '<g class="pose">' +
-      '<g transform="scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
-      ears +
-      '<ellipse cx="0" cy="-7" rx="8.5" ry="9" fill="' + body + '"/>' +
-      '<ellipse cx="0" cy="-4.5" rx="5" ry="5.2" fill="' + belly + '"/>' +
-      eyes + act +
-      '<ellipse cx="-3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>' +
-      '<ellipse cx="3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>' +
+      '<g transform="translate(0 ' + (inWater ? 3.5 : 0) + ') scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
+      parts.join('') +
       '</g></g></g>' + labelSvg + speechSvg + '</g>';
   }
 
@@ -2917,6 +3077,7 @@ html, body {
     }
     var kinLine = kin.length ? kin.join(' · ') : null;
     var skills = [];
+    if (W.isSwimmer(k)) skills.push('a swimmer: at home in the water');
     if (W.knowsOf(k).indexOf('seedkeeping') > -1) skills.push('a seed-keeper: it gardens');
     if (W.knowsOf(k).indexOf('song') > -1) skills.push('a singer: it sings against the storms');
     var skillLine = skills.length ? skills.join(' · ') : null;

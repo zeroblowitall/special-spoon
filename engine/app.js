@@ -605,56 +605,152 @@
   }
 
   function drawKith(k, now) {
-    var g = k.genome;
+    var g = W.modernKithGenome(k.genome);
     var pos = toScreen(k.x, k.y);
     var stage = W.kithStage(k, now);
     var scale = g.size * (stage === 'young' ? 0.65 : 1) * (0.85 + (k.y - 0.55) * 0.9);
     var sat = stage === 'elder' ? 30 : 60;
     var body = 'hsl(' + g.hue + ', ' + sat + '%, 58%)';
-    var belly = 'hsl(' + g.hue + ', ' + sat + '%, 74%)';
+    var pale = 'hsl(' + g.hue + ', ' + sat + '%, 74%)';
+    var deep = 'hsl(' + g.hue + ', ' + Math.max(25, sat - 10) + '%, 42%)';
     var sel = selected && selected.type === 'kith' && selected.id === k.id;
     var emissary = state.emissary === k.id;
+    var rng = W.mulberry32(W.hash32(k.id + ':body'));
+    var inWater = !W.isLandAt(W.makeTerrain(state.id), k.x, k.y);
+    var parts = [];
 
-    var ears = '';
-    if (g.ears === 1) {
-      ears = '<circle cx="-6" cy="-16" r="3" fill="' + body + '"/><circle cx="6" cy="-16" r="3" fill="' + body + '"/>';
-    } else if (g.ears === 2) {
-      ears = '<ellipse cx="-5" cy="-19" rx="2.4" ry="6" fill="' + body + '"/><ellipse cx="5" cy="-19" rx="2.4" ry="6" fill="' + body + '"/>';
+    /* torso geometry by form: 0 round, 1 tall, 2 long, 3 pear */
+    var rx = [8.5, 6.5, 11, 7.5][g.form] || 8.5;
+    var ry = [9, 11, 6.5, 8][g.form] || 9;
+    var cy = -ry + 2 + (g.limbs === 0 ? 2 : 0); // limbless bodies sit low
+    var top = cy - ry - (g.form === 3 ? 5 : 0);  // pears carry a head-bump
+
+    /* tail first (behind the body), at the back */
+    if (g.tail === 1) {
+      parts.push('<circle cx="' + (-rx - 1.5) + '" cy="' + (cy + 2) + '" r="2.6" fill="' + body + '"/>');
+    } else if (g.tail === 2) {
+      parts.push('<path d="M' + (-rx + 1) + ' ' + (cy + 2) + ' q -7 -1 -6 -7 q 0.8 -4 4 -3.4" stroke="' + body + '" stroke-width="2.6" fill="none" stroke-linecap="round"/>');
+    } else if (g.tail === 3) {
+      for (var t = 0; t < 3; t++) {
+        var ty = cy - 1 + (t - 1) * 3.4;
+        parts.push('<ellipse cx="' + (-rx - 4) + '" cy="' + ty + '" rx="6" ry="1.9" fill="' + (t === 1 ? body : pale) + '" transform="rotate(' + ((t - 1) * 24) + ' ' + (-rx - 4) + ' ' + ty + ')"/>');
+      }
+    } else if (g.tail === 4) {
+      parts.push('<path d="M' + (-rx + 1) + ' ' + (cy + 1) + ' l -8.5 -3" stroke="' + body + '" stroke-width="2.4" stroke-linecap="round"/>' +
+        '<circle cx="' + (-rx - 7.8) + '" cy="' + (cy - 2.2) + '" r="1.4" fill="' + deep + '"/>');
     }
 
-    var eyes = k.act === 'rest'
-      ? '<path d="M-4.5 -9 q 2 1.6 4 0" stroke="#222" stroke-width="1" fill="none"/><path d="M0.5 -9 q 2 1.6 4 0" stroke="#222" stroke-width="1" fill="none"/>'
-      : '<circle cx="-3" cy="-9" r="1.8" fill="#fff"/><circle cx="-2.6" cy="-9" r="1" fill="#222"/>' +
-        '<circle cx="3" cy="-9" r="1.8" fill="#fff"/><circle cx="3.4" cy="-9" r="1" fill="#222"/>';
+    /* second segment: a rear hump */
+    if (g.segs === 2) {
+      parts.push('<ellipse cx="' + (-rx * 0.62) + '" cy="' + (cy + 2) + '" rx="' + (rx * 0.72) + '" ry="' + (ry * 0.74) + '" fill="' + deep + '"/>');
+    }
 
-    var act = k.act === 'eat'
-      ? '<text x="9" y="-14" font-size="9" fill="#ffd166">✿</text>'
-      : '';
+    /* legs & feet (hidden while swimming) */
+    if (!inWater) {
+      if (g.limbs === 1) {
+        parts.push('<ellipse cx="-3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>' +
+          '<ellipse cx="3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>');
+      } else if (g.limbs === 2) {
+        [-6, -2.2, 2.2, 6].forEach(function (fx) {
+          parts.push('<ellipse cx="' + fx + '" cy="1" rx="1.8" ry="1.5" fill="' + body + '"/>');
+        });
+      }
+    }
+
+    /* the torso itself (pears get a head-bump above) */
+    parts.push('<ellipse cx="0" cy="' + cy + '" rx="' + rx + '" ry="' + ry + '" fill="' + body + '"/>');
+    if (g.form === 3) {
+      parts.push('<ellipse cx="' + (rx * 0.18) + '" cy="' + (cy - ry * 0.9) + '" rx="' + (rx * 0.68) + '" ry="' + (ry * 0.6) + '" fill="' + body + '"/>');
+    }
+
+    /* coat pattern */
+    if (g.pattern === 1) {
+      parts.push('<ellipse cx="0" cy="' + (cy + ry * 0.28) + '" rx="' + (rx * 0.58) + '" ry="' + (ry * 0.56) + '" fill="' + pale + '"/>');
+    } else if (g.pattern === 2) {
+      for (var s = 0; s < 4; s++) {
+        parts.push('<circle cx="' + ((rng() - 0.5) * rx * 1.2).toFixed(1) + '" cy="' + (cy + (rng() - 0.5) * ry * 1.1).toFixed(1) + '" r="' + (1.2 + rng()).toFixed(1) + '" fill="' + deep + '" opacity="0.8"/>');
+      }
+    } else if (g.pattern === 3) {
+      for (var st = 0; st < 3; st++) {
+        var sx = -rx * 0.5 + st * rx * 0.5;
+        parts.push('<path d="M' + sx + ' ' + (cy - ry * 0.8) + ' q 3 ' + (ry * 0.8) + ' 0 ' + (ry * 1.6) + '" stroke="' + deep + '" stroke-width="1.8" fill="none" opacity="0.75"/>');
+      }
+    } else if (g.pattern === 4) {
+      parts.push('<ellipse cx="' + (rx * 0.32) + '" cy="' + (cy - ry * 0.3) + '" rx="' + (rx * 0.52) + '" ry="' + (ry * 0.42) + '" fill="' + pale + '" opacity="0.9"/>');
+    }
+
+    /* fins: a swimmer's silhouette */
+    if (g.fins > 0) {
+      parts.push('<ellipse cx="' + (-rx * 0.15) + '" cy="' + (top + 1) + '" rx="2" ry="4.6" fill="' + deep + '" transform="rotate(-14 ' + (-rx * 0.15) + ' ' + (top + 1) + ')"/>');
+      parts.push('<ellipse cx="' + (rx * 0.55) + '" cy="' + (cy + ry * 0.5) + '" rx="4.2" ry="1.8" fill="' + deep + '" transform="rotate(24 ' + (rx * 0.55) + ' ' + (cy + ry * 0.5) + ')"/>');
+    }
+
+    /* crest / ears on the crown */
+    if (g.crest === 1) {
+      for (var c = 0; c < 3; c++) {
+        var cx2 = -4 + c * 4;
+        parts.push('<path d="M' + cx2 + ' ' + (top + 2) + ' l 1.6 -4.6 l 1.6 4.4 Z" fill="' + deep + '"/>');
+      }
+    } else if (g.crest === 2) {
+      parts.push('<path d="M-6 ' + (top + 2.5) + ' Q 0 ' + (top - 6.5) + ' 6 ' + (top + 2.5) + '" fill="' + pale + '" stroke="' + deep + '" stroke-width="0.8"/>');
+    } else if (g.crest === 3) {
+      for (var f = 0; f < 5; f++) {
+        var fx2 = -6 + f * 3;
+        var fh = 3.5 + (2 - Math.abs(f - 2)) * 1.6;
+        parts.push('<path d="M' + fx2 + ' ' + (top + 2) + ' l 1.2 -' + fh + ' l 1.2 ' + fh + ' Z" fill="' + (f % 2 ? pale : deep) + '"/>');
+      }
+    }
+    if (g.ears === 1) {
+      parts.push('<circle cx="-5" cy="' + (top + 0.5) + '" r="2.8" fill="' + body + '"/><circle cx="5" cy="' + (top + 0.5) + '" r="2.8" fill="' + body + '"/>');
+    } else if (g.ears === 2) {
+      parts.push('<ellipse cx="-4.5" cy="' + (top - 3) + '" rx="2.2" ry="5.6" fill="' + body + '"/><ellipse cx="4.5" cy="' + (top - 3) + '" rx="2.2" ry="5.6" fill="' + body + '"/>');
+    }
+
+    /* face: eyes across the brow, then the snout */
+    var eyeY = (cy - ry * 0.28).toFixed(1);
+    var eyeXs = g.eyes === 1 ? [0] : g.eyes === 2 ? [-3, 3] : g.eyes === 3 ? [-4, 0, 4] : [-4.5, -1.5, 1.5, 4.5];
+    eyeXs.forEach(function (ex) {
+      if (k.act === 'rest') {
+        parts.push('<path d="M' + (ex - 1.6) + ' ' + eyeY + ' q 1.6 1.5 3.2 0" stroke="#222" stroke-width="1" fill="none"/>');
+      } else {
+        parts.push('<circle cx="' + ex + '" cy="' + eyeY + '" r="1.8" fill="#fff"/>' +
+          '<circle cx="' + (ex + 0.5) + '" cy="' + eyeY + '" r="1" fill="#222"/>');
+      }
+    });
+    var eyeYn = parseFloat(eyeY);
+    if (g.snout === 1) {
+      parts.push('<path d="M' + (rx - 2) + ' ' + (eyeYn + 3.2) + ' l 5.5 1.6 l -5.2 2.2 Z" fill="' + pale + '" stroke="' + deep + '" stroke-width="0.6"/>');
+    } else if (g.snout === 2) {
+      parts.push('<ellipse cx="' + (rx - 1.5) + '" cy="' + (eyeYn + 4) + '" rx="3.6" ry="2.4" fill="' + pale + '"/>' +
+        '<circle cx="' + (rx + 1.4) + '" cy="' + (eyeYn + 3.6) + '" r="0.9" fill="' + deep + '"/>');
+    }
+
+    if (k.act === 'eat') parts.push('<text x="' + (rx + 2) + '" y="' + (top - 2) + '" font-size="9" fill="#ffd166">✿</text>');
+
+    /* swimming: sunk low, with a ripple at the waterline */
+    var ripple = inWater
+      ? '<ellipse cx="0" cy="0.5" rx="' + (rx + 3) + '" ry="2.6" fill="none" stroke="rgba(210,230,245,0.55)" stroke-width="1.1"/>'
+      : '<ellipse cx="0" cy="1" rx="' + (rx + 0.5) + '" ry="3" fill="rgba(0,0,0,0.25)"/>';
 
     var label = k.name || (emissary ? k.given : '');
     var labelSvg = label ? '<text class="plant-label" x="0" y="14">' + escapeHtml(label) + '</text>' : '';
     var saying = (k.saying && k.sayingUntil && now < k.sayingUntil) ? escapeHtml(k.saying) : '';
     // stagger bubbles by identity so close talkers don't overlap
-    var speechLift = 26 * scale + (W.hash32(k.id) % 3) * 9;
+    var speechLift = (-top + 8) * scale + 12 + (W.hash32(k.id) % 3) * 9;
     var speechShift = ((W.hash32(k.id + 'x') % 3) - 1) * 8;
     var speechSvg = '<text class="kith-speech" x="' + speechShift + '" y="' + (-speechLift).toFixed(0) + '">' + saying + '</text>';
     var haloSel = sel ? '<circle cx="0" cy="-6" r="16" fill="none" stroke="#ffd166" stroke-width="2" opacity="0.9"/>' : '';
     var haloEmissary = emissary ? '<circle cx="0" cy="-6" r="13" fill="none" stroke="#ffd166" stroke-width="1" stroke-dasharray="2 3" opacity="0.85" class="emissary-ring"/>' : '';
 
-    return '<g class="kith-group' + (sel ? ' selected' : '') + ' act-' + k.act + '" data-kith="' + k.id + '" ' +
+    return '<g class="kith-group' + (sel ? ' selected' : '') + ' act-' + k.act + (inWater ? ' swimming' : '') + '" data-kith="' + k.id + '" ' +
       'style="transition: transform ' + (KITH_TICK_MS / 1000 + 0.2) + 's linear" ' +
       'transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')">' +
-      '<ellipse cx="0" cy="1" rx="9" ry="3" fill="rgba(0,0,0,0.25)"/>' +
+      ripple +
       haloEmissary + haloSel +
       '<g class="kith-bob" style="animation-delay:-' + (W.hash32(k.id) % 3000) + 'ms">' +
       '<g class="pose">' +
-      '<g transform="scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
-      ears +
-      '<ellipse cx="0" cy="-7" rx="8.5" ry="9" fill="' + body + '"/>' +
-      '<ellipse cx="0" cy="-4.5" rx="5" ry="5.2" fill="' + belly + '"/>' +
-      eyes + act +
-      '<ellipse cx="-3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>' +
-      '<ellipse cx="3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>' +
+      '<g transform="translate(0 ' + (inWater ? 3.5 : 0) + ') scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
+      parts.join('') +
       '</g></g></g>' + labelSvg + speechSvg + '</g>';
   }
 
@@ -790,6 +886,7 @@
     }
     var kinLine = kin.length ? kin.join(' · ') : null;
     var skills = [];
+    if (W.isSwimmer(k)) skills.push('a swimmer: at home in the water');
     if (W.knowsOf(k).indexOf('seedkeeping') > -1) skills.push('a seed-keeper: it gardens');
     if (W.knowsOf(k).indexOf('song') > -1) skills.push('a singer: it sings against the storms');
     var skillLine = skills.length ? skills.join(' · ') : null;

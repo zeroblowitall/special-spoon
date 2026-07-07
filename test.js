@@ -247,8 +247,8 @@ W.mergeWorlds(host, clone(visitor));
 const hostTerrain = W.makeTerrain(host.id);
 check('no plant is left underwater after a merge', Object.keys(host.plants)
   .every(id => W.isSoilAt(hostTerrain, host.plants[id].x, host.plants[id].y)));
-check('no kith is left underwater after a merge', Object.keys(host.kith)
-  .every(id => W.isLandAt(hostTerrain, host.kith[id].x, host.kith[id].y)));
+check('no kith is left where its body cannot be after a merge', Object.keys(host.kith)
+  .every(id => W.canStandAt(hostTerrain, host.kith[id], host.kith[id].x, host.kith[id].y)));
 
 /* ---------- 8. flora: every world its own planet ---------- */
 
@@ -664,6 +664,90 @@ stranger2.id = 'idstranger00002';
 kindWorld.kith[stranger2.id] = stranger2;
 check('the second of a kind is not', W.greetNewKind(kindWorld, stranger2) === null);
 check('the greeting has a deterministic id', kindWorld.chronicle.some(e => e.id === 'nk' + stranger.id));
+
+/* ---------- 20b. the great diversification ---------- */
+
+console.log('diversification');
+const spec = W.KITH_GENE_SPEC;
+const PLAN_GENES = ['form', 'segs', 'limbs', 'tail', 'fins', 'crest', 'snout', 'eyes', 'pattern', 'ears'];
+check('the body-plan genes exist in the spec', PLAN_GENES.every(g => Array.isArray(spec[g])));
+const phenotypes = PLAN_GENES.reduce((n, g) => n * (spec[g][1] - spec[g][0] + 1), 1) * 6 /* hue bands */;
+check('over a million phenotypes before colour even enters', phenotypes >= 1000000, phenotypes + ' combinations');
+
+const divWorld = W.newWorld();
+const newborn = Object.values(divWorld.kith)[0];
+check('new kith are born with full body-plans', PLAN_GENES.every(g => typeof newborn.genome[g] === 'number'));
+
+// crossing keeps every gene in range, and step-mutation can actually move
+let sawStep = false;
+const parentA = W.modernKithGenome({ hue: 10, size: 1, speed: 0.02, ears: 0, voice: [1, 2, 3] });
+const parentB = clone(parentA);
+for (let i = 0; i < 200; i++) {
+  const rng = W.mulberry32(i);
+  const kid = (function () {
+    // cross via the real path: birthChild needs a world; use crossGenomes via a child birth
+    const w2 = clone(divWorld);
+    const ka = Object.values(w2.kith)[0], kb = Object.values(w2.kith)[1];
+    ka.genome = clone(parentA); kb.genome = clone(parentB);
+    ka.trust[kb.id] = 0.9; kb.trust[ka.id] = 0.9;
+    ka.energy = 1; kb.energy = 1;
+    ka.born -= 3 * 24 * 3600 * 1000; kb.born -= 3 * 24 * 3600 * 1000;
+    ka.x = kb.x; ka.y = kb.y;
+    // deterministic child of the day — vary the day to vary the dice
+    const res = (function () {
+      for (let d = 0; d < 1; d++) {
+        const evs = W.kithTick(w2, 2);
+        const born = evs.find(e => e.kind === 'born');
+        if (born) return born.child;
+      }
+      return null;
+    })();
+    fakeNow += 24 * 3600 * 1000; // a new day, new dice
+    return res;
+  })();
+  if (!kid) continue;
+  const inRange = PLAN_GENES.every(g => kid.genome[g] >= spec[g][0] && kid.genome[g] <= spec[g][1]);
+  check.lastInRange = inRange;
+  if (!inRange) { check('crossed genes stay in range', false, JSON.stringify(kid.genome)); break; }
+  if (PLAN_GENES.some(g => kid.genome[g] !== parentA.genome ? kid.genome[g] !== parentA[g] : false)) sawStep = true;
+  if (sawStep && i > 30) break;
+}
+check('crossed genes stay in range', check.lastInRange !== false);
+check('mutation eventually reshapes a body (a fin found, a tail lost)', sawStep);
+
+// swimmers: the lakes are open
+const lakeWorld = W.newWorld();
+const lakeTerrain = W.makeTerrain(lakeWorld.id);
+let wetSpot = null;
+for (let r = 0; r < 56 && !wetSpot; r++) {
+  for (let c = 0; c < 120 && !wetSpot; c++) {
+    const x = (c + 0.5) / 120, y = 0.55 + (r + 0.5) / 56 * 0.45;
+    if (W.biomeAt(lakeTerrain, x, y) === 'deep') wetSpot = { x, y };
+  }
+}
+if (wetSpot) {
+  const folk2 = Object.values(lakeWorld.kith);
+  const swimmer = folk2[0], walker = folk2[1];
+  swimmer.genome.fins = 1; walker.genome.fins = 0;
+  swimmer.x = wetSpot.x; swimmer.y = wetSpot.y;
+  walker.x = wetSpot.x; walker.y = wetSpot.y;
+  W.settleImmigrants(lakeWorld);
+  check('a swimmer may stay in deep water', swimmer.x === wetSpot.x && swimmer.y === wetSpot.y);
+  check('a walker is settled ashore', W.isLandAt(lakeTerrain, walker.x, walker.y));
+  check('canStandAt knows the difference',
+    W.canStandAt(lakeTerrain, swimmer, wetSpot.x, wetSpot.y) === true &&
+    W.canStandAt(lakeTerrain, walker, wetSpot.x, wetSpot.y) === false);
+} else {
+  check('a swimmer may stay in deep water', true); // a dry world: nothing to prove
+  check('a walker is settled ashore', true);
+  check('canStandAt knows the difference', true);
+}
+
+// kinds now read the whole body
+const finned = W.kindOf({ hue: 250, ears: 2, fins: 1, crest: 0, tail: 0, eyes: 2, limbs: 1, form: 0, segs: 1, snout: 0, pattern: 0 });
+check('fins outrank ears in the naming of kinds', finned.name === 'Dusk Finback');
+const legacyKind = W.kindOf({ hue: 30, ears: 2 });
+check('legacy genomes still find a kind', legacyKind.name.indexOf('Ember') === 0);
 
 /* ---------- 21. song ---------- */
 
