@@ -137,15 +137,17 @@
       ends: pickSome(FLORA_ENDS, 4),
       archetypes: []
     };
+    var realm = realmOf(worldId).realm;
+    var formPool = realm.forms || PLANT_FORMS;
     var count = 4 + Math.floor(rng() * 3); // 4-6 archetypes per world
     for (var i = 0; i < count; i++) {
       flora.archetypes.push({
-        form: pick(rng, PLANT_FORMS),
+        form: pick(rng, formPool),
         hue: Math.floor(rng() * 360),
         hueSpread: 18 + rng() * 55,
         size: 0.4 + rng() * 0.45,      // deliberately small — scenery, not stars
         aspect: 0.7 + rng() * 0.8,
-        glow: rng() < 0.22
+        glow: rng() < realm.glowBias   // the Fungal Deep shines; the salt does not
       });
     }
     floraCache[worldId] = flora;
@@ -225,17 +227,18 @@
   /* The body-plan genome: shape itself is heritable. The discrete genes
    * multiply out to well over a million distinct phenotypes before colour
    * and size even enter — and every one of them crosses and mutates. */
-  function newKithGenome(rng) {
+  function newKithGenome(rng, realmKey) {
+    var realm = REALMS[realmKey] || REALMS.meadow;
     return {
       hue: Math.floor(rng() * 360),
-      size: 0.8 + rng() * 0.5,
+      size: (0.8 + rng() * 0.5) * (realm.sizeBias || 1),
       speed: 0.012 + rng() * 0.014,   // field-fractions per second
       ears: Math.floor(rng() * 3),    // 0 none, 1 tufts, 2 long
       form: Math.floor(rng() * 4),    // 0 round, 1 tall, 2 long, 3 pear
       segs: 1 + Math.floor(rng() * 2),// body segments
-      limbs: Math.floor(rng() * 3),   // 0 none (glider-slug), 1 two feet, 2 four
+      limbs: (realm.limbBias && rng() < realm.limbBias) ? 0 : Math.floor(rng() * 3),
       tail: Math.floor(rng() * 5),    // 0 none, 1 nub, 2 curl, 3 plume, 4 spike
-      fins: Math.floor(rng() * 2),    // 1 = a swimmer: the lakes are open
+      fins: rng() < realm.finBias ? 1 : 0, // the realm shapes its founders
       crest: Math.floor(rng() * 4),   // 0 none, 1 spikes, 2 frill, 3 fan
       snout: Math.floor(rng() * 3),   // 0 soft, 1 beak, 2 muzzle
       eyes: 1 + Math.floor(rng() * 4),// one to four
@@ -265,9 +268,15 @@
 
   function isSwimmer(k) { return (k.genome.fins || 0) > 0; }
 
-  // Where can this body be? Land for all; water for the finned.
+  // Where can this body be? The realm decides what the deeps ARE:
+  // water welcomes the finned; ice bears anyone; lava, brine and molten
+  // glass admit no body at all.
   function canStandAt(terrain, k, x, y) {
-    return isLandAt(terrain, x, y) || isSwimmer(k);
+    if (isLandAt(terrain, x, y)) return true;
+    var pass = (REALMS[terrain.realm] || REALMS.meadow).pass;
+    if (pass === 'all') return true;
+    if (pass === 'none') return false;
+    return isSwimmer(k);
   }
 
   /* The mind: evolvable weights a kith is born with. Behaviour follows from
@@ -488,7 +497,7 @@
     };
     w.plants[plantId] = plant;
     chronicle(w, 'plant', kithLabel(k) + ' planted a ' + species + ' seed in the ' +
-      BIOMES[biomeAt(terrain, spot.x, spot.y)].name + '. The garden grows itself now.', 'gp' + plantId);
+      realmBiome(w.id, biomeAt(terrain, spot.x, spot.y)) + '. The garden grows itself now.', 'gp' + plantId);
     return plant;
   }
 
@@ -576,6 +585,97 @@
     return { ok: true, word: word };
   }
 
+  /* ---------- realms: the natures of worlds ----------
+   * A world's realm is derived purely from its identity, like its land.
+   * The realm decides what the land means: what fills the low places, what
+   * the weather is called, what grows, what bodies the founders are born
+   * with, and who may cross the deeps. Merges between realms are first
+   * contact between natures. */
+
+  var REALMS = {
+    meadow: {
+      name: 'the Meadowrealm', weight: 4, wl: [0.24, 0.4], pass: 'swim', finBias: 0.5,
+      born: 'among the green vales', glowBias: 0.22, forms: null,
+      biomes: { deep: 'deep water', shallows: 'shallows', shore: 'sandy shore', meadow: 'meadow', rock: 'rocky ground', peak: 'stony peaks' },
+      wx: { rain: 'rain', mist: 'mist', storm: 'storm', breeze: 'breeze' }
+    },
+    lakewild: {
+      name: 'the Lakewild', weight: 3, wl: [0.42, 0.56], pass: 'swim', finBias: 0.8,
+      born: 'among a thousand waters', glowBias: 0.2, forms: null,
+      biomes: { deep: 'deep water', shallows: 'shoals', shore: 'strand', meadow: 'isle-meadow', rock: 'skerries', peak: 'sea-crags' },
+      wx: { rain: 'rain', mist: 'sea-mist', storm: 'gale', breeze: 'breeze' }
+    },
+    mistral: {
+      name: 'the Mistral', weight: 3, wl: [0.34, 0.48], pass: 'swim', finBias: 0.6, limbBias: 0.45,
+      born: 'upon the floating isles', glowBias: 0.3, forms: ['puff', 'tendril', 'spire', 'stalk'],
+      biomes: { deep: 'open sky', shallows: 'cloud-sea', shore: 'islet edge', meadow: 'isle-green', rock: 'spirestone', peak: 'high crags' },
+      wx: { rain: 'skydrift', mist: 'cloudbank', storm: 'shearwind', breeze: 'updraught' }
+    },
+    ember: {
+      name: 'the Emberwaste', weight: 2, wl: [0.18, 0.3], pass: 'none', finBias: 0.25,
+      born: 'in the shadow of the fire-country', glowBias: 0.45, forms: ['spire', 'pod', 'stalk', 'rosette'],
+      biomes: { deep: 'lava pools', shallows: 'cooling crust', shore: 'cinder banks', meadow: 'ashfield', rock: 'scorched rock', peak: 'smoking crags' },
+      wx: { rain: 'ashfall', mist: 'smoke-haze', storm: 'firestorm', breeze: 'hot wind' }
+    },
+    frostmere: {
+      name: 'the Frostmere', weight: 2, wl: [0.3, 0.46], pass: 'all', finBias: 0.35, sizeBias: 1.12,
+      born: 'under the pale lights of the frozen country', glowBias: 0.28, forms: ['spire', 'puff', 'rosette', 'stalk'],
+      biomes: { deep: 'black ice', shallows: 'grey ice', shore: 'frost shore', meadow: 'snowfield', rock: 'frozen scree', peak: 'ice peaks' },
+      wx: { rain: 'snowfall', mist: 'ice-fog', storm: 'whiteout', breeze: 'north wind' }
+    },
+    fungal: {
+      name: 'the Fungal Deep', weight: 2, wl: [0.22, 0.36], pass: 'swim', finBias: 0.4,
+      born: 'beneath the ceiling of the under-country', glowBias: 0.85, forms: ['puff', 'pod', 'tendril', 'rosette'],
+      biomes: { deep: 'ink water', shallows: 'pale pools', shore: 'mycel banks', meadow: 'moss carpet', rock: 'cave stone', peak: 'stalagmite spires' },
+      wx: { rain: 'sporefall', mist: 'spore-haze', storm: 'cave squall', breeze: 'deep draught' }
+    },
+    saltflats: {
+      name: 'the Mirrorflats', weight: 2, wl: [0.12, 0.2], pass: 'none', finBias: 0.15,
+      born: 'on the shining salt', glowBias: 0.15, forms: ['spire', 'stalk', 'rosette', 'pod'],
+      biomes: { deep: 'brine mirrors', shallows: 'salt marsh', shore: 'crust banks', meadow: 'hardpan', rock: 'salt bluffs', peak: 'white mesas' },
+      wx: { rain: 'rare rain', mist: 'mirage-shimmer', storm: 'salt-storm', breeze: 'dry wind' }
+    },
+    duskmoor: {
+      name: 'the Duskmoor', weight: 2, wl: [0.3, 0.44], pass: 'swim', finBias: 0.55,
+      born: 'in the long twilight of the moor-country', glowBias: 0.5, forms: ['tendril', 'puff', 'stalk', 'pod'],
+      biomes: { deep: 'black tarns', shallows: 'bog water', shore: 'peat banks', meadow: 'heather moor', rock: 'tor stones', peak: 'dark fells' },
+      wx: { rain: 'drizzle', mist: 'moor-mist', storm: 'howling dark', breeze: 'cold breath' }
+    },
+    coralshelf: {
+      name: 'the Coralshelf', weight: 2, wl: [0.5, 0.62], pass: 'all', finBias: 0.9,
+      born: 'beneath the surface of the endless shallows', glowBias: 0.6, forms: ['tendril', 'pod', 'puff', 'spire'],
+      biomes: { deep: 'open sea', shallows: 'bright shallows', shore: 'coral shelf', meadow: 'kelp meadow', rock: 'reef stone', peak: 'coral towers' },
+      wx: { rain: 'plankton-fall', mist: 'murk', storm: 'undertow', breeze: 'current' }
+    },
+    glasswold: {
+      name: 'the Glasswold', weight: 1, wl: [0.2, 0.32], pass: 'none', finBias: 0.2,
+      born: 'among the singing glass', glowBias: 0.55, forms: ['spire', 'rosette', 'stalk', 'pod'],
+      biomes: { deep: 'molten glass', shallows: 'glass shallows', shore: 'shard banks', meadow: 'crystal flats', rock: 'prism stones', peak: 'glass spires' },
+      wx: { rain: 'chiming rain', mist: 'refraction-haze', storm: 'shatterstorm', breeze: 'thin song' }
+    }
+  };
+
+  var realmCache = {};
+
+  function realmOf(worldId) {
+    if (realmCache[worldId]) return realmCache[worldId];
+    var rng = mulberry32(hash32(worldId + ':realm'));
+    var keys = Object.keys(REALMS);
+    var total = keys.reduce(function (n, k2) { return n + REALMS[k2].weight; }, 0);
+    var roll = rng() * total;
+    var key = keys[keys.length - 1];
+    for (var i = 0; i < keys.length; i++) {
+      roll -= REALMS[keys[i]].weight;
+      if (roll <= 0) { key = keys[i]; break; }
+    }
+    realmCache[worldId] = { key: key, realm: REALMS[key] };
+    return realmCache[worldId];
+  }
+
+  function realmBiome(worldId, biomeKey) {
+    return realmOf(worldId).realm.biomes[biomeKey] || BIOMES[biomeKey].name;
+  }
+
   /* ---------- the land ----------
    * Terrain is IDENTITY, not content: it is derived purely from the world's
    * id, never stored, never merged. When worlds merge, travellers arrive
@@ -636,11 +736,14 @@
         heights[r2][c2] = (heights[r2][c2] - min) / (max - min || 1);
       }
     }
+    var realmInfo = realmOf(worldId);
+    var wl = realmInfo.realm.wl;
     var terrain = {
       cols: TERRAIN_COLS,
       rows: TERRAIN_ROWS,
       heights: heights,
-      waterline: 0.24 + rng() * 0.16   // some worlds are lakelands, some dry
+      realm: realmInfo.key,
+      waterline: wl[0] + rng() * (wl[1] - wl[0]) // the realm sets the flood
     };
     terrainCache[worldId] = terrain;
     return terrain;
@@ -766,7 +869,8 @@
     else if (roll < c.storm + c.rain) kind = 'rain';
     else if (roll < c.storm + c.rain + c.mist) kind = 'mist';
     else if (roll < c.storm + c.rain + c.mist + c.breeze) kind = 'breeze';
-    return { kind: kind, bucket: bucket, intensity: 0.5 + rng() * 0.5 };
+    var label = kind === 'clear' ? 'clear' : (realmOf(worldId).realm.wx[kind] || kind);
+    return { kind: kind, bucket: bucket, intensity: 0.5 + rng() * 0.5, label: label };
   }
 
   var STORM_TEXTS = [
@@ -792,27 +896,36 @@
 
   /* ---------- world ---------- */
 
-  // Prospect candidate worlds until the land fits the asked temperament.
-  function mineWorldId(temperament) {
+  // Prospect candidate worlds until the land (and nature) fit the ask.
+  function mineWorldId(temperament, nature) {
     var best = null, bestScore = -Infinity;
-    for (var i = 0; i < 24; i++) {
+    var wantNature = nature && nature !== 'surprise' && REALMS[nature];
+    var wantLand = temperament && temperament !== 'surprise';
+    for (var i = 0; i < 60; i++) {
       var id = env.newId();
-      var s = terrainStats(id);
       var score = 0;
-      if (temperament === 'lakeland') score = s.water;
-      else if (temperament === 'highlands') score = s.high - Math.max(0, s.water - 0.25);
-      else if (temperament === 'plains') score = s.soil - s.high - s.water;
-      else if (temperament === 'drylands') score = -s.water + s.soil * 0.3;
+      if (wantNature) {
+        if (realmOf(id).key === nature) score += 100;
+        else if (i < 50) continue; // keep prospecting; settle late if unlucky
+      }
+      if (wantLand) {
+        var s = terrainStats(id);
+        if (temperament === 'lakeland') score += s.water;
+        else if (temperament === 'highlands') score += s.high - Math.max(0, s.water - 0.25);
+        else if (temperament === 'plains') score += s.soil - s.high - s.water;
+        else if (temperament === 'drylands') score += -s.water + s.soil * 0.3;
+      }
       if (score > bestScore) { bestScore = score; best = id; }
+      if (wantNature && !wantLand && score >= 100) break; // any world of that nature will do
     }
-    return best;
+    return best || env.newId();
   }
 
   function newWorld(opts) {
     opts = opts || {};
-    var id = (opts.temperament && opts.temperament !== 'surprise')
-      ? mineWorldId(opts.temperament)
-      : env.newId();
+    var wantsChoice = (opts.temperament && opts.temperament !== 'surprise') ||
+      (opts.nature && opts.nature !== 'surprise');
+    var id = wantsChoice ? mineWorldId(opts.temperament, opts.nature) : env.newId();
     var rng = mulberry32(hash32(id));
     var w = {
       format: 'driftgarden/1',
@@ -827,7 +940,7 @@
       lineage: [],
       merges: 0
     };
-    chronicle(w, 'born', 'The world ' + w.name + ' came into being.');
+    chronicle(w, 'born', 'The world ' + w.name + ' came into being ' + realmOf(id).realm.born + '.');
     plantSeed(w, true); // wild things grew here first —
     plantSeed(w, true); // — no founder starves before the first garden
     spawnFounderKith(w);
@@ -875,13 +988,14 @@
       u: bumpClock(w)
     };
     w.plants[id] = plant;
+    var whereName = realmBiome(w.id, biomeAt(terrain, spot.x, spot.y));
     if (wild) {
       plant.growth = 0.4 + mulberry32(hash32(id + ':wild'))() * 0.4; // already coming up
       chronicle(w, 'plant', 'A wild ' + plant.species + ' has grown in the ' +
-        BIOMES[biomeAt(terrain, spot.x, spot.y)].name + ' since before the world had its name.');
+        whereName + ' since before the world had its name.');
     } else {
       chronicle(w, 'plant', 'A ' + plant.species + ' seed was planted in the ' +
-        BIOMES[biomeAt(terrain, spot.x, spot.y)].name + '.');
+        whereName + '.');
     }
     return plant;
   }
@@ -961,9 +1075,10 @@
 
   function spawnFounderKith(w) {
     var rng = mulberry32(hash32(w.id + ':founders'));
+    var realmKey = realmOf(w.id).key;
     var names = [];
     for (var i = 0; i < FOUNDER_COUNT; i++) {
-      names.push(makeKith(w, rng, newKithGenome(rng)).given);
+      names.push(makeKith(w, rng, newKithGenome(rng, realmKey)).given);
     }
     chronicle(w, 'kith', 'Three small kith wandered in and made this world their home: ' +
       names[0] + ', ' + names[1] + ' and ' + names[2] + '.');
@@ -1595,6 +1710,14 @@
       chronicle(w, 'merge', 'The worlds ' + canonicalNames[0] + ' and ' + canonicalNames[1] +
         ' met, and became one.', 'm' + sortedIds.join('') + '-' + mergeClock, sortedIds[0]);
 
+      // first contact between NATURES is worth a line of its own
+      var realmA = realmOf(sortedIds[0]).realm, realmB = realmOf(sortedIds[1]).realm;
+      if (realmA !== realmB) {
+        chronicle(w, 'merge', 'One world is of ' + realmA.name + '; the other of ' + realmB.name +
+          '. Natures that had never touched now share one soil.',
+          'rlm' + sortedIds.join('') + '-' + mergeClock, sortedIds[0]);
+      }
+
       // The emissaries meet first — their child leads the new generation.
       if (ourEmissary && theirEmissary && ourEmissary.id !== theirEmissary.id) {
         var kithParents = [ourEmissary, theirEmissary].sort(function (a, b) { return a.id < b.id ? -1 : 1; });
@@ -1753,6 +1876,9 @@
     setEnv: setEnv,
     hash32: hash32,
     mulberry32: mulberry32,
+    realmOf: realmOf,
+    realmBiome: realmBiome,
+    REALMS: REALMS,
     makeTerrain: makeTerrain,
     biomeAt: biomeAt,
     biomeInfo: function (key) { return BIOMES[key]; },

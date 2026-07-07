@@ -749,6 +749,101 @@ check('fins outrank ears in the naming of kinds', finned.name === 'Dusk Finback'
 const legacyKind = W.kindOf({ hue: 30, ears: 2 });
 check('legacy genomes still find a kind', legacyKind.name.indexOf('Ember') === 0);
 
+/* ---------- 20c. realms: the natures of worlds ---------- */
+
+console.log('realms');
+check('a realm is deterministic per world', W.realmOf('realmtest0000001').key === W.realmOf('realmtest0000001').key &&
+  stable(W.realmOf('realmtest0000001')) === stable(W.realmOf('realmtest0000001')));
+const seenRealms = {};
+for (let i = 0; i < 80; i++) seenRealms[W.realmOf('variety' + i).key] = true;
+check('the natures are many (6+ realms in 80 worlds)', Object.keys(seenRealms).length >= 6,
+  Object.keys(seenRealms).join(', '));
+
+// each realm's flood obeys its range
+let checkedWl = 0;
+for (let i = 0; i < 40 && checkedWl < 5; i++) {
+  const id = 'wl' + i + 'xxxxxxxxxxxx';
+  const t = W.makeTerrain(id);
+  const range = W.REALMS[W.realmOf(id).key].wl;
+  if (t.waterline < range[0] || t.waterline > range[1]) {
+    check('the waterline obeys the realm', false, W.realmOf(id).key + ': ' + t.waterline);
+    checkedWl = -999;
+    break;
+  }
+  checkedWl++;
+}
+if (checkedWl > 0) check('the waterline obeys the realm', true);
+
+// passability is the realm's law
+function mineRealmWorld(natureKey) {
+  for (let i = 0; i < 400; i++) {
+    const id = 'mine' + natureKey + i;
+    if (W.realmOf(id).key === natureKey) return id;
+  }
+  return null;
+}
+const emberId = mineRealmWorld('ember');
+const frostId = mineRealmWorld('frostmere');
+const coralId = mineRealmWorld('coralshelf');
+check('realm worlds can be found by prospecting', !!emberId && !!frostId && !!coralId);
+if (emberId && frostId && coralId) {
+  const finless = { genome: { fins: 0 } };
+  const finned = { genome: { fins: 1 } };
+  function deepSpotOf(id) {
+    const t = W.makeTerrain(id);
+    for (let r = 0; r < 56; r++) for (let c = 0; c < 120; c++) {
+      const x = (c + 0.5) / 120, y = 0.55 + (r + 0.5) / 56 * 0.45;
+      if (W.biomeAt(t, x, y) === 'deep') return { t: t, x: x, y: y };
+    }
+    return null;
+  }
+  const emberDeep = deepSpotOf(emberId), frostDeep = deepSpotOf(frostId), coralDeep = deepSpotOf(coralId);
+  if (emberDeep) check('no body may cross the lava', !W.canStandAt(emberDeep.t, finned, emberDeep.x, emberDeep.y) &&
+    !W.canStandAt(emberDeep.t, finless, emberDeep.x, emberDeep.y));
+  else check('no body may cross the lava', true); // a dry ember world
+  if (frostDeep) check('anyone may walk the black ice', W.canStandAt(frostDeep.t, finless, frostDeep.x, frostDeep.y));
+  else check('anyone may walk the black ice', true);
+  if (coralDeep) check('all the Coralshelf is open sea, open to all', W.canStandAt(coralDeep.t, finless, coralDeep.x, coralDeep.y));
+  else check('all the Coralshelf is open sea, open to all', true);
+
+}
+
+// founders carry their realm in their bodies: the Lakewild breeds swimmers
+const lakewildWorld = W.newWorld({ nature: 'lakewild' });
+check('a Lakewild founder is finned (0.8 bias, three founders)',
+  Object.values(lakewildWorld.kith).some(k => k.genome.fins > 0));
+
+// asking for a nature delivers that nature
+const askedMistral = W.newWorld({ nature: 'mistral' });
+check('a world of the asked nature is delivered', W.realmOf(askedMistral.id).key === 'mistral');
+check('its birth names its nature', askedMistral.chronicle[0].text.indexOf('floating isles') > -1);
+const askedFungal = W.newWorld({ nature: 'fungal' });
+check('the Fungal Deep glows', W.makeFlora(askedFungal.id).archetypes.some(a => a.glow));
+check('realm weather speaks its own tongue', (function () {
+  for (let h = 0; h < 200; h++) {
+    const wx = W.weatherAt(askedFungal.id, fakeNow + h * 2 * 3600 * 1000);
+    if (wx.kind === 'rain') return wx.label === 'sporefall';
+  }
+  return true; // never rained in 400 hours — a dry cave
+})());
+
+// cross-realm merges chronicle first contact between natures, identically
+const worldA2 = W.newWorld({ nature: 'ember' });
+const worldB2 = W.newWorld({ nature: 'frostmere' });
+const xAB = clone(worldA2), xBA = clone(worldB2);
+W.mergeWorlds(xAB, clone(worldB2));
+W.mergeWorlds(xBA, clone(worldA2));
+const contactA2 = xAB.chronicle.find(e => e.id.indexOf('rlm') === 0);
+const contactB2 = xBA.chronicle.find(e => e.id.indexOf('rlm') === 0);
+check('first contact between natures is chronicled', !!contactA2 && contactA2.text.indexOf('Natures that had never touched') > -1);
+check('identically on both sides of the meeting', !!contactA2 && !!contactB2 &&
+  contactA2.id === contactB2.id && contactA2.text === contactB2.text);
+const sameNatureA = W.newWorld({ nature: 'duskmoor' });
+const sameNatureB = W.newWorld({ nature: 'duskmoor' });
+const sameMerge = clone(sameNatureA);
+W.mergeWorlds(sameMerge, clone(sameNatureB));
+check('kindred natures pass without remark', !sameMerge.chronicle.some(e => e.id.indexOf('rlm') === 0));
+
 /* ---------- 21. song ---------- */
 
 console.log('song');

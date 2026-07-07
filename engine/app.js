@@ -324,20 +324,52 @@
 
   /* ---------- the land, painted ---------- */
 
-  var BIOME_PAINT = {
-    deep: [35, 64, 94],
-    shallows: [46, 90, 117],
-    shore: [183, 162, 118],
-    meadow: [74, 107, 58],
-    rock: [109, 106, 99],
-    peak: [143, 141, 136]
+  /* Ten natures, ten palettes: what the low places are made of, what the
+   * ground is, what colour the sky turns at noon and at midnight. */
+  var REALM_PAINT = {
+    meadow:     { deep: [35, 64, 94],   shallows: [46, 90, 117],  shore: [183, 162, 118], meadow: [74, 107, 58],   rock: [109, 106, 99],  peak: [143, 141, 136] },
+    lakewild:   { deep: [30, 70, 105],  shallows: [42, 100, 130], shore: [180, 165, 125], meadow: [70, 110, 62],   rock: [105, 105, 100], peak: [138, 140, 138] },
+    mistral:    { deep: [150, 170, 205], shallows: [208, 214, 228], shore: [172, 164, 150], meadow: [96, 120, 88], rock: [128, 124, 138], peak: [160, 158, 170] },
+    ember:      { deep: [198, 84, 30],  shallows: [130, 62, 40],  shore: [92, 70, 62],    meadow: [88, 82, 78],    rock: [66, 58, 56],    peak: [104, 88, 84] },
+    frostmere:  { deep: [38, 58, 84],   shallows: [120, 150, 168], shore: [176, 190, 198], meadow: [214, 224, 230], rock: [140, 150, 158], peak: [235, 240, 244] },
+    fungal:     { deep: [18, 26, 40],   shallows: [46, 62, 80],   shore: [92, 82, 96],    meadow: [52, 84, 70],    rock: [58, 54, 66],    peak: [92, 86, 104] },
+    saltflats:  { deep: [150, 180, 190], shallows: [160, 170, 150], shore: [212, 206, 188], meadow: [200, 192, 170], rock: [188, 178, 158], peak: [232, 228, 214] },
+    duskmoor:   { deep: [22, 26, 34],   shallows: [46, 52, 48],   shore: [86, 74, 64],    meadow: [96, 74, 104],   rock: [74, 70, 78],    peak: [58, 56, 66] },
+    coralshelf: { deep: [24, 84, 112],  shallows: [64, 150, 160], shore: [214, 132, 112], meadow: [46, 116, 86],   rock: [150, 110, 124], peak: [226, 150, 130] },
+    glasswold:  { deep: [220, 150, 70], shallows: [180, 150, 120], shore: [190, 186, 196], meadow: [168, 180, 190], rock: [150, 140, 170], peak: [214, 214, 228] }
   };
+
+  var REALM_SKY = {
+    meadow:     { day: ['#7db4d8', '#cfe6d8', '#2e4630'], night: ['#0b1026', '#1b2333', '#141d16'] },
+    lakewild:   { day: ['#74aed6', '#d2e8e2', '#2c4a34'], night: ['#0a1228', '#1a2740', '#12201a'] },
+    mistral:    { day: ['#8fb8e8', '#e6dff0', '#3c5040'], night: ['#101a33', '#25304d', '#161e2c'] },
+    ember:      { day: ['#4a3231', '#7a4a35', '#332420'], night: ['#1c0f10', '#331612', '#1f1210'] },
+    frostmere:  { day: ['#a8c6de', '#e6eef2', '#6b7f8c'], night: ['#0c1626', '#14323b', '#101c22'] },
+    fungal:     { day: ['#1c2226', '#232d2a', '#182420'], night: ['#0c1013', '#131a18', '#0e1512'] },
+    saltflats:  { day: ['#b8cfe0', '#f2efe4', '#7d786a'], night: ['#101322', '#1f2438', '#161822'] },
+    duskmoor:   { day: ['#4a4a78', '#c08a6a', '#2c2434'], night: ['#171530', '#2c2344', '#1a1626'] },
+    coralshelf: { day: ['#1e6f86', '#2fa3ab', '#123c46'], night: ['#081e30', '#0e3546', '#0a2028'] },
+    glasswold:  { day: ['#9fb6c9', '#e8d9ee', '#5a6470'], night: ['#0e1420', '#232945', '#141828'] }
+  };
+
+  function mixHex(a, b, t) {
+    function ch(hex, i) { return parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16); }
+    function two(n) { return ('0' + Math.round(n).toString(16)).slice(-2); }
+    return '#' + two(ch(a, 0) + (ch(b, 0) - ch(a, 0)) * t) +
+      two(ch(a, 1) + (ch(b, 1) - ch(a, 1)) * t) +
+      two(ch(a, 2) + (ch(b, 2) - ch(a, 2)) * t);
+  }
+
+  function realmPaint() {
+    return REALM_PAINT[W.realmOf(state.id).key] || REALM_PAINT.meadow;
+  }
 
   var terrainImageCache = {};
 
   function terrainDataURL(worldId) {
     if (terrainImageCache[worldId]) return terrainImageCache[worldId];
     var terrain = W.makeTerrain(worldId);
+    var paint = REALM_PAINT[W.realmOf(worldId).key] || REALM_PAINT.meadow;
     var canvas = document.createElement('canvas');
     var CW = 600, CH = 320;
     canvas.width = CW; canvas.height = CH;
@@ -358,7 +390,7 @@
       for (var px = 0; px < CW; px++) {
         var wx = px / CW;
         var biome = W.biomeAt(terrain, wx, wy);
-        var base = BIOME_PAINT[biome];
+        var base = paint[biome];
         var cell = cellAt(wx, wy);
         var r = base[0], g = base[1], b = base[2];
 
@@ -401,12 +433,21 @@
   }
 
   function skyColors() {
+    var sky = REALM_SKY[W.realmOf(state.id).key] || REALM_SKY.meadow;
     var h = new Date().getHours();
-    if (h >= 21 || h < 5) return ['#0b1026', '#1b2333', '#141d16'];
-    if (h < 8) return ['#2b3a5c', '#b57967', '#233225'];
-    if (h < 17) return ['#7db4d8', '#cfe6d8', '#2e4630'];
-    if (h < 21) return ['#3f4d78', '#d99a6c', '#26381f'];
-    return ['#7db4d8', '#cfe6d8', '#2e4630'];
+    function slot(t, warm) {
+      // between night and day, warmed toward the horizon fire at the edges
+      return [
+        mixHex(sky.night[0], sky.day[0], t),
+        mixHex(mixHex(sky.night[1], sky.day[1], t), '#d99a6c', warm),
+        mixHex(sky.night[2], sky.day[2], t)
+      ];
+    }
+    if (h >= 21 || h < 5) return sky.night;
+    if (h < 8) return slot(0.5, 0.35);   // dawn
+    if (h < 17) return sky.day;
+    if (h < 21) return slot(0.45, 0.45); // dusk
+    return sky.day;
   }
 
   function render() {
@@ -474,7 +515,7 @@
     }
 
     stage.innerHTML =
-      '<svg id="world" class="wx-' + wx.kind + '" viewBox="' + camViewBox() + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="The garden">' +
+      '<svg id="world" class="wx-' + wx.kind + ' realm-' + W.realmOf(state.id).key + '" viewBox="' + camViewBox() + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="The garden">' +
       svgParts.join('') + '</svg>' +
       '<div id="cam-controls">' +
       '<button class="btn small" data-cam="in" title="Zoom in">+</button>' +
@@ -787,12 +828,15 @@
 
   /* ---------- chrome ---------- */
 
-  var WX_WORDS = { clear: '', breeze: 'a breeze is up', mist: 'mist on the water', rain: 'rain is falling', storm: 'a storm rages' };
+  var WX_VERBS = { breeze: ' stirs', mist: ' lies low', rain: ' is falling', storm: ' rages' };
 
   function topbarHTML() {
     var notes = [];
     if (state.lineage.length > 0) notes.push('woven from ' + (state.lineage.length + 1) + ' worlds');
-    if (lastWxKind && WX_WORDS[lastWxKind]) notes.push(WX_WORDS[lastWxKind]);
+    if (lastWxKind && lastWxKind !== 'clear' && WX_VERBS[lastWxKind]) {
+      var wxNow = W.weatherAt(state.id, Date.now());
+      notes.push(wxNow.label + WX_VERBS[lastWxKind]);
+    }
     var gen = notes.length ? ' <span class="gen">· ' + notes.join(' · ') + '</span>' : '';
     return '<div id="topbar">' +
       '<button id="world-name" title="Rename this world">' + escapeHtml(state.name) + gen + '</button>' +
@@ -825,7 +869,7 @@
         escapeHtml(p.bornOfMerge.worlds[1]) + '</strong> — child of ' + escapeHtml(p.bornOfMerge.parents[0]) +
         ' and ' + escapeHtml(p.bornOfMerge.parents[1]) + '.</div>'
       : '';
-    var biome = W.biomeInfo(W.biomeAt(W.makeTerrain(state.id), p.x, p.y)).name;
+    var biome = W.realmBiome(state.id, W.biomeAt(W.makeTerrain(state.id), p.x, p.y));
     var vigour = (p.soil || 1) > 1.05 ? 'thriving in rich soil' : (p.soil || 1) < 0.8 ? 'toughing out poor ground' : 'settled in fair soil';
     return '<div id="panel">' +
       '<h2>' + escapeHtml(p.name || 'Unnamed ' + p.species) + '</h2>' +
@@ -906,7 +950,7 @@
     var emissaryNote = emissary
       ? '<div class="hybrid-note">✦ Your emissary. When worlds merge, ' + escapeHtml(W.kithLabel(k)) + ' will lead the meeting.</div>'
       : '';
-    var standing = W.biomeInfo(W.biomeAt(W.makeTerrain(state.id), k.x, k.y)).name;
+    var standing = W.realmBiome(state.id, W.biomeAt(W.makeTerrain(state.id), k.x, k.y));
     var kind = W.kindOf(k.genome);
     return '<div id="panel">' +
       '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
@@ -1010,7 +1054,8 @@
         var when = entry.touched ? new Date(entry.touched).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '';
         return '<div class="chronicle-entry"><span class="what"><strong>' + escapeHtml(entry.name) + '</strong>' +
           (current ? ' <span class="badge-now">you are here</span>' : '') +
-          '<br><span class="muted">' + entry.kith + ' kith · ' + entry.plants + ' plants · last tended ' + when + '</span></span>' +
+          '<br><span class="muted">of ' + escapeHtml(W.realmOf(entry.id).realm.name) + ' · ' +
+          entry.kith + ' kith · ' + entry.plants + ' plants · last tended ' + when + '</span></span>' +
           '<span class="when">' +
           (current ? '' : '<button class="btn small" data-world-visit="' + entry.id + '">Visit</button> ') +
           '<button class="btn small" data-world-forget="' + entry.id + '">Let go…</button>' +
@@ -1021,13 +1066,20 @@
         '<div>' + rows + '</div>' +
         '<h2 style="margin-top:1.25rem">Begin a new world</h2>' +
         '<div class="row"><input type="text" id="nw-name" placeholder="A name (or leave blank for fate to choose)"></div>' +
+        '<div class="row"><label class="muted" for="nw-nature">Its nature:</label> ' +
+        '<select id="nw-nature">' +
+        '<option value="surprise">Surprise me</option>' +
+        Object.keys(W.REALMS).map(function (rk) {
+          return '<option value="' + rk + '">' + escapeHtml(W.REALMS[rk].name.replace(/^the /, 'The ')) + '</option>';
+        }).join('') +
+        '</select></div>' +
         '<div class="row"><label class="muted" for="nw-temp">The land:</label> ' +
         '<select id="nw-temp">' +
         '<option value="surprise">Surprise me</option>' +
-        '<option value="lakeland">Lakeland — water everywhere</option>' +
+        '<option value="lakeland">Lakeland — low places everywhere</option>' +
         '<option value="highlands">Highlands — rock and peaks</option>' +
-        '<option value="plains">Plains — broad meadows</option>' +
-        '<option value="drylands">Drylands — scarcely a puddle</option>' +
+        '<option value="plains">Plains — broad open ground</option>' +
+        '<option value="drylands">Drylands — scarcely a low place</option>' +
         '</select></div>' +
         '<div class="row"><button class="btn primary" data-act="new-world">Bring it into being</button>' +
         '<button class="btn" data-act="close-modal">Close</button></div>';
@@ -1212,9 +1264,10 @@
         } else if (act === 'new-world') {
           var newName = (document.getElementById('nw-name').value || '').trim();
           var temperament = document.getElementById('nw-temp').value;
-          var fresh = W.newWorld({ name: newName || null, temperament: temperament });
+          var nature = document.getElementById('nw-nature').value;
+          var fresh = W.newWorld({ name: newName || null, temperament: temperament, nature: nature });
           switchToWorld(fresh);
-          toast('The world ' + state.name + ' came into being. Three kith are already exploring it.');
+          toast('The world ' + state.name + ' came into being ' + W.realmOf(state.id).realm.born + '. Three kith are already exploring it.');
         } else if (act === 'merge-paste-go') {
           handleIncomingWorld(document.getElementById('merge-paste').value);
         } else if (act === 'export-world') {
