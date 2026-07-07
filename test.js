@@ -844,6 +844,74 @@ const sameMerge = clone(sameNatureA);
 W.mergeWorlds(sameMerge, clone(sameNatureB));
 check('kindred natures pass without remark', !sameMerge.chronicle.some(e => e.id.indexOf('rlm') === 0));
 
+/* ---------- 20d. proto-sentences ---------- */
+
+console.log('sentences');
+const grammarWorld = W.newWorld();
+const speakersG = Object.values(grammarWorld.kith);
+const gA = speakersG[0], gB = speakersG[1];
+check('a newborn instinct decides first word order', ['mf', 'cf'].indexOf(W.orderEntry(grammarWorld, gA).word) > -1);
+check('the instinct is deterministic per kith', W.orderEntry(grammarWorld, gA).word === W.orderEntry(grammarWorld, gA).word);
+
+// a sentence: intent + thing, in the speaker's order
+const sentence = W.speakSentence(grammarWorld, gA, gB, 'mark:want', 'water', fakeNow);
+check('a sentence has two words', sentence.split(' ').length === 2);
+const wantWord = gA.lex['mark:want'].word;
+const waterWord = gA.lex.water.word;
+check('it is built from the speaker\'s own words',
+  sentence === wantWord + ' ' + waterWord || sentence === waterWord + ' ' + wantWord);
+check('the order follows the speaker\'s convention',
+  (gA.lex[':order'].word === 'mf') === (sentence.indexOf(wantWord) === 0));
+
+// order converges like any word
+gA.lex[':order'] = { word: 'mf', s: 0.9, by: gA.id };
+gB.lex[':order'] = { word: 'cf', s: 0.2, by: gB.id };
+for (let i = 0; i < 6; i++) W.exchangeWord(grammarWorld, gA, gB, ':order');
+check('the surer grammar carries', gB.lex[':order'].word === 'mf');
+check('the world leans one way', W.worldOrder(grammarWorld) === 'mf');
+
+// grammar is never evicted by a crowded vocabulary
+for (let i = 0; i < 20; i++) W.attendConcept(grammarWorld, gA, 'plant:Crowd' + i);
+check('grammar survives a crowded vocabulary', !!gA.lex[':order']);
+
+// hunger speaks: a hungry speaker wants
+let hungryWorld = W.newWorld();
+while (W.weatherAt(hungryWorld.id, fakeNow).kind === 'storm') hungryWorld = W.newWorld();
+const hungryFolk = Object.values(hungryWorld.kith);
+hungryFolk.forEach((k, i) => {
+  k.x = 0.5 + i * 0.01; k.y = 0.8; k.tx = null; k.ty = null;
+  k.act = 'rest'; k.actUntil = fakeNow + 600000;
+  k.energy = i === 0 ? 0.2 : 0.9; // one hungry speaker among the content
+});
+let spokeWant = false;
+for (let t = 0; t < 80 && !spokeWant; t++) {
+  W.kithTick(hungryWorld, 2);
+  fakeNow += 2000;
+  spokeWant = hungryFolk.some(k => k.lex && k.lex['mark:want'] && k.saying && k.saying.split(' ').length === 2 &&
+    k.saying.indexOf(k.lex['mark:want'].word) > -1);
+}
+check('a hungry speaker speaks its wanting', spokeWant);
+
+// two grammars under one sky: the clash is chronicled, identically
+const mfWorld = W.newWorld();
+const cfWorld = W.newWorld();
+Object.values(mfWorld.kith).forEach(k => { k.lex[':order'] = { word: 'mf', s: 0.9, by: k.id }; });
+Object.values(cfWorld.kith).forEach(k => { k.lex[':order'] = { word: 'cf', s: 0.9, by: k.id }; });
+const gAB = clone(mfWorld), gBA = clone(cfWorld);
+W.mergeWorlds(gAB, clone(cfWorld));
+W.mergeWorlds(gBA, clone(mfWorld));
+const clashA = gAB.chronicle.find(e => e.id.indexOf('gx') === 0);
+const clashB = gBA.chronicle.find(e => e.id.indexOf('gx') === 0);
+check('the meeting of grammars is chronicled', !!clashA && clashA.text.indexOf('Two ways of speaking') > -1);
+check('identically on both sides', !!clashA && !!clashB && clashA.id === clashB.id && clashA.text === clashB.text);
+const mfTwinA = W.newWorld();
+const mfTwinB = W.newWorld();
+Object.values(mfTwinA.kith).forEach(k => { k.lex[':order'] = { word: 'mf', s: 0.9, by: k.id }; });
+Object.values(mfTwinB.kith).forEach(k => { k.lex[':order'] = { word: 'mf', s: 0.9, by: k.id }; });
+const agreeMerge = clone(mfTwinA);
+W.mergeWorlds(agreeMerge, clone(mfTwinB));
+check('kindred grammars pass without remark', !agreeMerge.chronicle.some(e => e.id.indexOf('gx') === 0));
+
 /* ---------- 21. song ---------- */
 
 console.log('song');

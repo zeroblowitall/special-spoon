@@ -1026,9 +1026,23 @@
         '<button class="btn" data-act="close-modal">Close</button></div>';
     } else if (openModal === 'lexicon') {
       var tongue = W.worldLexicon(state);
-      var concepts = Object.keys(tongue).sort(function (a, b) {
-        return tongue[b][0].weight - tongue[a][0].weight;
-      });
+      var concepts = Object.keys(tongue).filter(function (c) { return c !== ':order'; })
+        .sort(function (a, b) {
+          return tongue[b][0].weight - tongue[a][0].weight;
+        });
+      // the world's grammar, with a living example if the words exist
+      var order = W.worldOrder(state);
+      var grammarLine = '';
+      if (order) {
+        var intentRow = (tongue['mark:good'] || tongue['mark:want'] || tongue['mark:fear'] || [])[0];
+        var thingRow = (tongue['home'] || tongue['sun'] || tongue['water'] || [])[0];
+        var example = (intentRow && thingRow)
+          ? ' — they say “' + escapeHtml(order === 'mf' ? intentRow.word + ' ' + thingRow.word : thingRow.word + ' ' + intentRow.word) + '”'
+          : '';
+        grammarLine = '<p><strong>The grammar of this world:</strong> ' +
+          (order === 'mf' ? 'the feeling comes first, then the thing' : 'the thing comes first, then the feeling') +
+          example + '.</p>';
+      }
       var canWhisper = state.emissary && state.kith[state.emissary] && !state.kith[state.emissary].passed &&
         (!state.whispered || Date.now() - state.whispered > 20 * 3600 * 1000);
       var lexRows = concepts.map(function (concept) {
@@ -1044,8 +1058,9 @@
           '<span class="when">' + (canWhisper ? '<button class="btn small" data-whisper="' + escapeHtml(concept) + '">whisper…</button>' : '') + '</span></div>';
       }).join('');
       inner = '<h2>The Lexicon</h2>' +
-        '<p class="muted">The kith are naming their world. Words are coined in each speaker\'s own voice and spread from mouth to mouth; every world converges on a tongue of its own, and when worlds merge, dialects meet.' +
+        '<p class="muted">The kith are naming their world. Words are coined in each speaker\'s own voice and spread from mouth to mouth; every world converges on a tongue of its own — and now on sentences: a feeling and a thing, in this world\'s own word order. When worlds merge, dialects and grammars meet.' +
         (canWhisper ? ' Once a day you may whisper a word to your emissary, and see if it spreads.' : '') + '</p>' +
+        grammarLine +
         (lexRows || '<p class="muted">No words yet — the kith speak when their paths cross. Listen for the small words above their heads.</p>') +
         '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
     } else if (openModal === 'worlds') {

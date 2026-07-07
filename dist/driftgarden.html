@@ -379,7 +379,7 @@ html, body {
 <p><strong>On a phone?</strong> Your device probably opened this file in a built-in viewer that doesn't run JavaScript. Save the file, then open it with a real browser: in your Files app, long-press the file and choose <em>Open with → Chrome</em> (or Firefox). The world will be waiting.</p>
 </div></noscript>
 <div id="stage"></div>
-<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.13.0 */;</script>
+<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.14.0 */;</script>
 <script id="dg-world">
 /* Driftgarden — world logic.
  * Everything that is TRUE about a world lives here: genomes, growth, kith,
@@ -712,8 +712,9 @@ html, body {
     if (!k.lex) k.lex = {};
     if (k.lex[concept]) return k.lex[concept];
     k.lex[concept] = { word: coinWord(k, concept), s: 0.3, by: k.id };
-    // cap the vocabulary; the faintest word fades first, deterministically
-    var concepts = Object.keys(k.lex);
+    // cap the vocabulary; the faintest word fades first, deterministically.
+    // Grammar (':order') is not a word and never fades.
+    var concepts = Object.keys(k.lex).filter(function (c) { return c !== ':order'; });
     if (concepts.length > LEX_CAP) {
       concepts.sort(function (a, b) { return k.lex[a].s - k.lex[b].s || (a < b ? -1 : 1); });
       delete k.lex[concepts[0]];
@@ -723,19 +724,7 @@ html, body {
   }
 
   function speakBetween(w, speaker, listener, concept, now) {
-    var said = attendConcept(w, speaker, concept);
-    var heard = attendConcept(w, listener, concept);
-    if (said.word === heard.word) {
-      said.s = Math.min(1, said.s + 0.15);   // agreement: the word takes root
-      heard.s = Math.min(1, heard.s + 0.15);
-    } else if (said.s >= heard.s) {
-      // the surer voice carries; the coiner's name travels with the word
-      listener.lex[concept] = { word: said.word, s: 0.25, by: said.by };
-      said.s = Math.min(1, said.s + 0.1);
-      listener.u = bumpClock(w);
-    } else {
-      said.s = Math.max(0.05, said.s - 0.05); // spoke, but wasn't followed
-    }
+    var said = exchangeWord(w, speaker, listener, concept);
     speaker.saying = said.word;
     speaker.sayingUntil = now + 3500;
     return said.word;
@@ -745,8 +734,75 @@ html, body {
     if (concept.indexOf('plant:') === 0) return 'the ' + concept.slice(6);
     return {
       home: 'this world', rain: 'the rain', storm: 'the storm',
-      mist: 'the mist', sun: 'the sun', water: 'the water'
+      mist: 'the mist', sun: 'the sun', water: 'the water',
+      song: 'the song',
+      'mark:want': 'wanting', 'mark:fear': 'fear',
+      'mark:good': 'gladness', 'mark:friend': 'friendship'
     }[concept] || concept;
+  }
+
+  /* ---------- proto-sentences ----------
+   * Two slots: an intent word and a thing word. Intents are concepts like
+   * any other, coined in each speaker's own voice. And the ORDER of the two
+   * slots is itself a convention — learned, spread, and converged on by the
+   * same naming game, so every world develops its own grammar. */
+
+  // Which comes first here: the feeling, or the thing? A newborn instinct,
+  // then a convention. ':order' is never evicted and never shown as a word.
+  function orderEntry(w, k) {
+    if (!k.lex) k.lex = {};
+    if (!k.lex[':order']) {
+      k.lex[':order'] = { word: (hash32(k.id + ':order') % 2 === 0) ? 'mf' : 'cf', s: 0.3, by: k.id };
+      k.u = bumpClock(w);
+    }
+    return k.lex[':order'];
+  }
+
+  // One step of the naming game between two speakers over one concept.
+  function exchangeWord(w, speaker, listener, concept) {
+    var said = concept === ':order' ? orderEntry(w, speaker) : attendConcept(w, speaker, concept);
+    var heard = concept === ':order' ? orderEntry(w, listener) : attendConcept(w, listener, concept);
+    if (said.word === heard.word) {
+      said.s = Math.min(1, said.s + 0.15);
+      heard.s = Math.min(1, heard.s + 0.15);
+    } else if (said.s >= heard.s) {
+      listener.lex[concept] = { word: said.word, s: 0.25, by: said.by };
+      said.s = Math.min(1, said.s + 0.1);
+      listener.u = bumpClock(w);
+    } else {
+      said.s = Math.max(0.05, said.s - 0.05);
+    }
+    return speaker.lex[concept];
+  }
+
+  // A two-word utterance: intent + thing, in the speaker's word order.
+  function speakSentence(w, speaker, listener, intent, concept, now) {
+    var intentEntry = exchangeWord(w, speaker, listener, intent);
+    var contentWord;
+    if (concept.indexOf('name:') === 0) {
+      contentWord = concept.slice(5).toLowerCase(); // a friend's own name
+    } else {
+      contentWord = exchangeWord(w, speaker, listener, concept).word;
+    }
+    exchangeWord(w, speaker, listener, ':order');
+    var order = speaker.lex[':order'].word;
+    var sentence = order === 'mf'
+      ? intentEntry.word + ' ' + contentWord
+      : contentWord + ' ' + intentEntry.word;
+    speaker.saying = sentence;
+    speaker.sayingUntil = now + 3500;
+    return sentence;
+  }
+
+  // The world's grammar: which order do the living lean toward?
+  function worldOrder(w) {
+    var tally = { mf: 0, cf: 0 };
+    livingKith(w).forEach(function (k) {
+      var entry = k.lex && k.lex[':order'];
+      if (entry) tally[entry.word] += entry.s;
+    });
+    if (tally.mf === 0 && tally.cf === 0) return null;
+    return tally.mf >= tally.cf ? 'mf' : 'cf';
   }
 
   // The world's tongue: every living voice tallied, strongest words first.
@@ -1844,7 +1900,9 @@ html, body {
           }
         }
 
-        // chatter: what is nearby is what gets named
+        // chatter: what is nearby is what gets named — and, more and more,
+        // spoken about in sentences: a feeling and a thing, in this world's
+        // own word order
         if (rng() < 0.4) {
           var wx2 = weatherAt(w.id, now).kind;
           var concept = null;
@@ -1858,7 +1916,27 @@ html, body {
           else if (wx2 !== 'clear' && wx2 !== 'breeze' && rng() < 0.6) concept = wx2;
           else concept = rng() < 0.5 ? 'home' : (rng() < 0.5 ? 'sun' : 'water');
           var roles = rng() < 0.5 ? [ka, kb] : [kb, ka];
-          speakBetween(w, roles[0], roles[1], concept, now);
+          var speaker = roles[0], listener = roles[1];
+          if (rng() < 0.4) {
+            // sometimes still a single word — the old game keeps converging
+            speakBetween(w, speaker, listener, concept, now);
+          } else {
+            // the feeling is the speaker's own truth of the moment
+            var intent;
+            if (speaker.energy < 0.45) {
+              intent = 'mark:want';
+              if (!nearestSpecies) concept = 'water';
+            } else if (wx2 === 'storm') {
+              intent = 'mark:fear';
+              concept = 'storm';
+            } else if ((speaker.trust[listener.id] || 0) >= 0.5 && rng() < 0.4) {
+              intent = 'mark:friend';
+              concept = 'name:' + listener.given;
+            } else {
+              intent = 'mark:good';
+            }
+            speakSentence(w, speaker, listener, intent, concept, now);
+          }
         }
 
         // courting: two bonded, hale, grown kith in fair weather
@@ -2048,6 +2126,8 @@ html, body {
     // Each side's tongue, as it was before the meeting — for the record.
     var ourTongue = worldLexicon(w);
     var theirTongue = worldLexicon({ kith: other.kith || {} });
+    var ourOrder = worldOrder(w);
+    var theirOrder = worldOrder({ kith: other.kith || {} });
 
     var weKnowThem = w.lineage.some(function (l) { return l.id === other.id; });
     var theyKnowUs = (other.lineage || []).some(function (l) { return l.id === w.id; });
@@ -2156,6 +2236,17 @@ html, body {
         chronicle(w, 'kith', 'In ' + canonicalNames[0] + ' they call ' + conceptLabel(contactConcept) +
           ' “' + wordPair[0] + '”; in ' + canonicalNames[1] + ' it is “' + wordPair[1] +
           '”. Both words live here now.', 'lx' + sortedIds.join('') + '-' + mergeClock, sortedIds[0]);
+      }
+
+      // Two grammars under one sky: when the worlds order their words
+      // differently, the chronicle keeps the moment the ways of speaking met.
+      if (ourOrder && theirOrder && ourOrder !== theirOrder) {
+        var mfName = (w.id < other.id ? (ourOrder === 'mf') : (theirOrder === 'mf'))
+          ? canonicalNames[0] : canonicalNames[1];
+        var cfName = mfName === canonicalNames[0] ? canonicalNames[1] : canonicalNames[0];
+        chronicle(w, 'kith', 'In ' + mfName + ' the feeling comes first when they speak; in ' +
+          cfName + ', the thing itself. Two ways of speaking now share one world.',
+          'gx' + sortedIds.join('') + '-' + mergeClock, sortedIds[0]);
       }
 
       // The gardens cross too.
@@ -2296,6 +2387,10 @@ html, body {
     coinWord: coinWord,
     attendConcept: attendConcept,
     speakBetween: speakBetween,
+    exchangeWord: exchangeWord,
+    speakSentence: speakSentence,
+    orderEntry: orderEntry,
+    worldOrder: worldOrder,
     worldLexicon: worldLexicon,
     conceptLabel: conceptLabel,
     whisperWord: whisperWord,
@@ -3349,9 +3444,23 @@ html, body {
         '<button class="btn" data-act="close-modal">Close</button></div>';
     } else if (openModal === 'lexicon') {
       var tongue = W.worldLexicon(state);
-      var concepts = Object.keys(tongue).sort(function (a, b) {
-        return tongue[b][0].weight - tongue[a][0].weight;
-      });
+      var concepts = Object.keys(tongue).filter(function (c) { return c !== ':order'; })
+        .sort(function (a, b) {
+          return tongue[b][0].weight - tongue[a][0].weight;
+        });
+      // the world's grammar, with a living example if the words exist
+      var order = W.worldOrder(state);
+      var grammarLine = '';
+      if (order) {
+        var intentRow = (tongue['mark:good'] || tongue['mark:want'] || tongue['mark:fear'] || [])[0];
+        var thingRow = (tongue['home'] || tongue['sun'] || tongue['water'] || [])[0];
+        var example = (intentRow && thingRow)
+          ? ' — they say “' + escapeHtml(order === 'mf' ? intentRow.word + ' ' + thingRow.word : thingRow.word + ' ' + intentRow.word) + '”'
+          : '';
+        grammarLine = '<p><strong>The grammar of this world:</strong> ' +
+          (order === 'mf' ? 'the feeling comes first, then the thing' : 'the thing comes first, then the feeling') +
+          example + '.</p>';
+      }
       var canWhisper = state.emissary && state.kith[state.emissary] && !state.kith[state.emissary].passed &&
         (!state.whispered || Date.now() - state.whispered > 20 * 3600 * 1000);
       var lexRows = concepts.map(function (concept) {
@@ -3367,8 +3476,9 @@ html, body {
           '<span class="when">' + (canWhisper ? '<button class="btn small" data-whisper="' + escapeHtml(concept) + '">whisper…</button>' : '') + '</span></div>';
       }).join('');
       inner = '<h2>The Lexicon</h2>' +
-        '<p class="muted">The kith are naming their world. Words are coined in each speaker\'s own voice and spread from mouth to mouth; every world converges on a tongue of its own, and when worlds merge, dialects meet.' +
+        '<p class="muted">The kith are naming their world. Words are coined in each speaker\'s own voice and spread from mouth to mouth; every world converges on a tongue of its own — and now on sentences: a feeling and a thing, in this world\'s own word order. When worlds merge, dialects and grammars meet.' +
         (canWhisper ? ' Once a day you may whisper a word to your emissary, and see if it spreads.' : '') + '</p>' +
+        grammarLine +
         (lexRows || '<p class="muted">No words yet — the kith speak when their paths cross. Listen for the small words above their heads.</p>') +
         '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
     } else if (openModal === 'worlds') {
