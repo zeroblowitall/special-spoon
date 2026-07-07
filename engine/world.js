@@ -353,6 +353,7 @@
       home: 'this world', rain: 'the rain', storm: 'the storm',
       mist: 'the mist', sun: 'the sun', water: 'the water',
       song: 'the song',
+      gardener: 'the unseen gardener — you',
       'mark:want': 'wanting', 'mark:fear': 'fear',
       'mark:good': 'gladness', 'mark:friend': 'friendship'
     }[concept] || concept;
@@ -634,6 +635,7 @@
     if (!e || e.passed) return { ok: false, why: 'Whispers need a living emissary to hear them.' };
     if (!e.lex) e.lex = {};
     e.lex[concept] = { word: word, s: 1, by: 'whisper' };
+    e.g = (e.g || 0) + 0.4; // to be spoken to is to know someone is there
     e.u = bumpClock(w);
     w.whispered = env.now();
     chronicle(w, 'kith', 'Something on the wind whispered to ' + kithLabel(e) + ', who now calls ' +
@@ -1025,6 +1027,17 @@
     var flora = makeFlora(w.id);
     var spot = findSpot(w, 'seed:' + id, isSoilAt);
     var arch = flora.archetypes[Math.floor(rng() * flora.archetypes.length)];
+    // an open question answered: a kith asked, and the gardener planted
+    if (!wild && w.lastAsk && env.now() - w.lastAsk.at < 5 * 60 * 1000) {
+      var asker = w.kith && w.kith[w.lastAsk.kithId];
+      if (asker && !asker.passed) {
+        asker.g = (asker.g || 0) + 0.5;
+        asker.u = bumpClock(w);
+        chronicle(w, 'contact', 'The gardener answered. ' + kithLabel(asker) +
+          ' watched the seed go into the ground, and understood.');
+      }
+      w.lastAsk = null;
+    }
     var plant = {
       id: id,
       species: floraSpeciesName(flora, rng),
@@ -1040,6 +1053,7 @@
       growth: 0,
       watered: 0,
       origin: w.id,
+      byHand: !wild,          // the gardener's own work, and the kith notice
       bornOfMerge: null,
       u: bumpClock(w)
     };
@@ -1287,6 +1301,10 @@
             // in cycles and a small garden cannot feed a large tribe
             plant.growth = Math.max(GRAZE_FLOOR, plant.growth - GRAZE_COST);
             attendConcept(w, k, 'plant:' + plant.species); // a thing eaten is a thing named
+            // a meal from the gardener's hand is quietly remembered
+            if (plant.byHand || (plant.watered && now - plant.watered < 24 * 3600 * 1000)) {
+              k.g = (k.g || 0) + 0.15;
+            }
             var learned = (k.taste[plant.species] === undefined);
             k.taste[plant.species] = liking; // it now KNOWS how this tastes
             // eureka: a curious mind, a well-loved plant, a spark
@@ -1433,11 +1451,14 @@
           k.tx = friend.x; k.ty = friend.y;
         }
       } else if (k.tx === null || (Math.abs(k.tx - k.x) < 0.01 && Math.abs(k.ty - k.y) < 0.01)) {
-        // a soft call on the wind — the curious answer it
+        // a soft call on the wind — the curious answer it, and remember
         if (call && rng() < 0.25 + brain.curiosity * 0.55) {
           var bx = Math.max(0.03, Math.min(0.97, call.x + (rng() - 0.5) * 0.06));
           var by = Math.max(0.56, Math.min(0.97, call.y + (rng() - 0.5) * 0.04));
-          if (canStandAt(terrain, k, bx, by)) { k.tx = bx; k.ty = by; }
+          if (canStandAt(terrain, k, bx, by)) {
+            k.tx = bx; k.ty = by;
+            if (k.gCallMark !== call.until) { k.g = (k.g || 0) + 0.08; k.gCallMark = call.until; }
+          }
         } else if (rng() < brain.patience * 0.6) {
           k.act = 'rest';
           k.actUntil = now + (4 + rng() * 12) * 1000;
@@ -1529,7 +1550,8 @@
             var pd = Math.sqrt((p2.x - ka.x) * (p2.x - ka.x) + (p2.y - ka.y) * (p2.y - ka.y));
             if (pd < nearestPd) { nearestPd = pd; nearestSpecies = p2.species; }
           });
-          if (nearestSpecies && rng() < 0.6) concept = 'plant:' + nearestSpecies;
+          if (ka.lex && ka.lex.gardener && rng() < 0.12) concept = 'gardener'; // your name travels
+          else if (nearestSpecies && rng() < 0.6) concept = 'plant:' + nearestSpecies;
           else if (wx2 !== 'clear' && wx2 !== 'breeze' && rng() < 0.6) concept = wx2;
           else concept = rng() < 0.5 ? 'home' : (rng() < 0.5 ? 'sun' : 'water');
           var roles = rng() < 0.5 ? [ka, kb] : [kb, ka];
@@ -1564,6 +1586,53 @@
           if (birth) events.push(birth);
         }
       }
+    }
+
+    /* -- the ripple: where, one day, one of them speaks to you -- */
+    if (call) {
+      alive.forEach(function (k) {
+        var cd = Math.sqrt((k.x - call.x) * (k.x - call.x) + (k.y - call.y) * (k.y - call.y));
+        if (cd >= 0.07) return;
+        if (!w.gardenerNamed) {
+          // the conditions of courage: a tended world, a trusting heart,
+          // a curious mind, standing at the centre of your call
+          if (now - w.born > 2 * DAY && (k.g || 0) >= 0.5 &&
+              k.brain.curiosity > 0.55 && rng() < 0.25) {
+            var gardenerWord = coinWord(k, 'gardener');
+            k.lex.gardener = { word: gardenerWord, s: 0.6, by: k.id };
+            w.gardenerNamed = { by: k.id, word: gardenerWord, at: now };
+            k.u = bumpClock(w);
+            k.saying = gardenerWord + '?';
+            k.sayingUntil = now + 7000;
+            var contactText = kithLabel(k) + ' came to the very centre of the ripple, looked up at ' +
+              'nothing at all, and spoke into it: “' + gardenerWord + '?” — a word nothing in this ' +
+              'world carries. It has named the unseen gardener. It is waiting.';
+            chronicle(w, 'contact', contactText, 'fc' + k.id);
+            events.push({ kind: 'contact', text: contactText });
+          }
+        } else if (k.lex && k.lex.gardener && rng() < 0.2) {
+          // those who know your name may ask things of you
+          if (k.energy < 0.5) {
+            var wants = attendConcept(w, k, 'mark:want');
+            var favourites2 = Object.keys(k.taste || {}).filter(function (s) { return k.taste[s] > 0.2; })
+              .sort(function (a, b) { return k.taste[b] - k.taste[a] || (a < b ? -1 : 1); });
+            var thing = favourites2.length
+              ? attendConcept(w, k, 'plant:' + favourites2[0]).word
+              : attendConcept(w, k, 'water').word;
+            var askOrder = orderEntry(w, k).word;
+            k.saying = (askOrder === 'mf' ? wants.word + ' ' + thing : thing + ' ' + wants.word) + '?';
+            k.sayingUntil = now + 6000;
+            w.lastAsk = { kithId: k.id, at: now };
+          } else if (rng() < 0.5) {
+            var glad = attendConcept(w, k, 'mark:good');
+            var greetOrder = orderEntry(w, k).word;
+            k.saying = greetOrder === 'mf'
+              ? glad.word + ' ' + k.lex.gardener.word
+              : k.lex.gardener.word + ' ' + glad.word;
+            k.sayingUntil = now + 5000;
+          }
+        }
+      });
     }
 
     /* -- song carries: a singer in the storm steadies every heart nearby.

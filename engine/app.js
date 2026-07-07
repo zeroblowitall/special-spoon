@@ -930,6 +930,7 @@
     }
     var kinLine = kin.length ? kin.join(' · ') : null;
     var skills = [];
+    if (k.lex && k.lex.gardener) skills.push('it calls you “' + escapeHtml(k.lex.gardener.word) + '”');
     if (W.isSwimmer(k)) skills.push('a swimmer: at home in the water');
     if (W.knowsOf(k).indexOf('seedkeeping') > -1) skills.push('a seed-keeper: it gardens');
     if (W.knowsOf(k).indexOf('song') > -1) skills.push('a singer: it sings against the storms');

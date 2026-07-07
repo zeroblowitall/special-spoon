@@ -37,7 +37,7 @@ function stable(value) {
 
 // Positions are presentation, not content: every world settles travellers
 // onto its OWN land, so x/y legitimately differ between copies.
-const POSITION_KEYS = { x: 1, y: 1, tx: 1, ty: 1, facing: 1, saying: 1, sayingUntil: 1 };
+const POSITION_KEYS = { x: 1, y: 1, tx: 1, ty: 1, facing: 1, saying: 1, sayingUntil: 1, gCallMark: 1 };
 function content(value) {
   const c = clone(value);
   (function strip(node) {
@@ -911,6 +911,75 @@ Object.values(mfTwinB.kith).forEach(k => { k.lex[':order'] = { word: 'mf', s: 0.
 const agreeMerge = clone(mfTwinA);
 W.mergeWorlds(agreeMerge, clone(mfTwinB));
 check('kindred grammars pass without remark', !agreeMerge.chronicle.some(e => e.id.indexOf('gx') === 0));
+
+/* ---------- 20e. the first address ---------- */
+
+console.log('the first address');
+let contactWorld = W.newWorld();
+while (W.weatherAt(contactWorld.id, fakeNow + 3 * 24 * 3600 * 1000).kind === 'storm') contactWorld = W.newWorld();
+check('hand-planted seeds are marked', (function () {
+  const p = W.plantSeed(contactWorld);
+  return p.byHand === true;
+})());
+check('wild growth is not', Object.values(contactWorld.plants).some(p => p.byHand === false));
+
+// a meal from the gardener's hand is quietly remembered
+const diner = Object.values(contactWorld.kith)[0];
+const handPlant = Object.values(contactWorld.plants).find(p => p.byHand);
+handPlant.growth = 1;
+diner.x = handPlant.x; diner.y = handPlant.y; diner.tx = null; diner.ty = null;
+diner.energy = 0.1;
+Object.values(contactWorld.kith).forEach(k => { if (k.id !== diner.id) { k.energy = 0.9; k.x = 0.1; k.y = 0.6; k.act = 'rest'; k.actUntil = fakeNow + 900000; } });
+const gBefore = diner.g || 0;
+for (let t = 0; t < 12; t++) { W.kithTick(contactWorld, 2); fakeNow += 2000; }
+check('a meal from your hand is quietly remembered', (diner.g || 0) > gBefore);
+
+// the moment: aged world, trusting curious kith, standing in the call
+hoursPass(50); // the world grows old enough
+const brave = diner;
+brave.g = 1;
+brave.brain.curiosity = 0.9;
+brave.energy = 0.9;
+brave.act = 'rest'; brave.actUntil = fakeNow + 900000;
+brave.x = 0.5; brave.y = 0.8;
+const theCall = { x: 0.5, y: 0.8, until: fakeNow + 900000 };
+let spoke = null;
+for (let t = 0; t < 60 && !spoke; t++) {
+  const evs = W.kithTick(contactWorld, 2, theCall);
+  fakeNow += 2000;
+  spoke = evs.find(e => e.kind === 'contact');
+}
+check('one of them speaks to you', !!spoke);
+check('it has coined a word nothing else carries', !!contactWorld.gardenerNamed &&
+  typeof contactWorld.gardenerNamed.word === 'string' && contactWorld.gardenerNamed.word.length >= 2);
+check('the moment is chronicled once, with its id', contactWorld.chronicle.filter(e => e.id === 'fc' + brave.id).length === 1);
+check('the namer carries your name', brave.lex.gardener && brave.lex.gardener.word === contactWorld.gardenerNamed.word);
+check('it happens only once', (function () {
+  const before = contactWorld.chronicle.filter(e => e.kind === 'contact').length;
+  for (let t = 0; t < 30; t++) { W.kithTick(contactWorld, 2, theCall); fakeNow += 2000; }
+  // requests may follow, but no second naming
+  return !contactWorld.chronicle.some((e, i) => e.kind === 'contact' && e.id.indexOf('fc') === 0 && e.id !== 'fc' + brave.id);
+})());
+
+// the ask, and the answer
+brave.energy = 0.2; // hungry, and it knows your name
+brave.taste['Askbloom'] = 0.9;
+let asked = false;
+for (let t = 0; t < 60 && !asked; t++) {
+  W.kithTick(contactWorld, 2, theCall);
+  fakeNow += 2000;
+  asked = !!contactWorld.lastAsk && contactWorld.lastAsk.kithId === brave.id;
+}
+check('the hungry who know your name ask you for things', asked);
+check('its ask ends with a question', asked && brave.saying && brave.saying.slice(-1) === '?');
+if (asked) {
+  W.plantSeed(contactWorld); // the gardener answers
+  check('the answer is chronicled', contactWorld.chronicle.some(e => e.text.indexOf('The gardener answered') > -1));
+  check('and the asker understood', (brave.g || 0) > 1.2);
+} else {
+  check('the answer is chronicled', false, 'no ask to answer');
+  check('and the asker understood', false, 'no ask to answer');
+}
 
 /* ---------- 21. song ---------- */
 
