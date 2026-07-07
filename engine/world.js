@@ -395,6 +395,13 @@
 
   function knowsOf(k) { return k.knows || []; }
 
+  var SKILL_NAMES = {
+    seedkeeping: 'the way of seed-keeping',
+    song: 'the song'
+  };
+
+  function skillName(skill) { return SKILL_NAMES[skill] || skill; }
+
   function learn(w, k, skill) {
     if (knowsOf(k).indexOf(skill) > -1) return false;
     k.knows = knowsOf(k).concat([skill]);
@@ -443,6 +450,39 @@
     chronicle(w, 'plant', kithLabel(k) + ' planted a ' + species + ' seed in the ' +
       BIOMES[biomeAt(terrain, spot.x, spot.y)].name + '. The garden grows itself now.', 'gp' + plantId);
     return plant;
+  }
+
+  /* ---------- kinds: speciation you can see ----------
+   * A kith's kind is a pure function of its visible morphology, identical
+   * in every copy of every world. Inheritance keeps children close to their
+   * parents' kind; mutation eventually crosses a boundary — and a world
+   * greets the first of a kind it has never seen. */
+
+  var HUE_KIND_WORDS = ['Ember', 'Gold', 'Moss', 'Lake', 'Dusk', 'Rose'];
+  var EAR_KIND_WORDS = ['Smoothbrow', 'Tuftear', 'Longear'];
+
+  function kindOf(genome) {
+    var hueBand = Math.floor((((genome.hue % 360) + 360) % 360) / 60);
+    var ears = Math.max(0, Math.min(2, genome.ears || 0));
+    return {
+      key: hueBand + '-' + ears,
+      name: HUE_KIND_WORDS[hueBand] + ' ' + EAR_KIND_WORDS[ears]
+    };
+  }
+
+  // Called with a newborn already in w.kith: is it the first of its kind
+  // among the living here? Chronicled with a deterministic id, so drifted
+  // copies that both witness the birth remember one arrival, not two.
+  function greetNewKind(w, child, fixedWorld) {
+    var kind = kindOf(child.genome);
+    var already = livingKith(w).some(function (k) {
+      return k.id !== child.id && kindOf(k.genome).key === kind.key;
+    });
+    if (already) return null;
+    var text = 'A kith of a new kind: ' + child.given + ', the first ' + kind.name +
+      ' this world has seen.';
+    chronicle(w, 'kind', text, 'nk' + child.id, fixedWorld);
+    return { kind: 'kind', text: text };
   }
 
   /* Family lines, derived from parenthood: the roots are kith with no
@@ -982,6 +1022,7 @@
     a.u = bumpClock(w); b.u = bumpClock(w);
     var text = kithLabel(parents[0]) + ' and ' + kithLabel(parents[1]) + ' had a child: ' + child.given + '.';
     chronicle(w, 'born', text, 'b' + childId);
+    greetNewKind(w, child);
     return { kind: 'born', text: text, child: child };
   }
 
@@ -1047,7 +1088,26 @@
       if (k.act === 'rest' || k.act === 'shelter') {
         if (k.act === 'shelter' && !storm) { k.act = 'wander'; k.tx = null; }
         else if (k.act === 'rest' && now >= k.actUntil) { k.act = 'wander'; k.tx = null; }
-        else if (k.act === 'shelter') return;
+        else if (k.act === 'shelter') {
+          // huddled together against the weather: where song is born
+          var huddled = alive.some(function (o) {
+            return o.id !== k.id && o.act === 'shelter' &&
+              Math.abs(o.x - k.x) < 0.08 && Math.abs(o.y - k.y) < 0.08;
+          });
+          if (huddled && knowsOf(k).indexOf('song') === -1 &&
+              k.brain.patience > 0.65 && k.brain.sociability > 0.6 && rng() < 0.08) {
+            learn(w, k, 'song');
+            var songText = 'In the middle of the storm, ' + kithLabel(k) +
+              ' began to sing — the first song this world has heard.';
+            chronicle(w, 'discovery', songText, 'ds' + k.id);
+            events.push({ kind: 'discovery', text: songText });
+          }
+          if (knowsOf(k).indexOf('song') > -1) {
+            k.saying = '♪ ' + attendConcept(w, k, 'song').word;
+            k.sayingUntil = now + 3500;
+          }
+          return;
+        }
         else return;
       }
 
@@ -1219,7 +1279,7 @@
             var lesson = knowsOf(teacher).filter(function (s) { return knowsOf(pupil).indexOf(s) === -1; })[0];
             if (lesson && pupil.brain.curiosity > 0.35) {
               learn(w, pupil, lesson);
-              var taughtText = kithLabel(teacher) + ' taught ' + kithLabel(pupil) + ' the way of seed-keeping.';
+              var taughtText = kithLabel(teacher) + ' taught ' + kithLabel(pupil) + ' ' + skillName(lesson) + '.';
               chronicle(w, 'discovery', taughtText, 'dt' + pupil.id + lesson);
               events.push({ kind: 'discovery', text: taughtText });
               break;
@@ -1252,6 +1312,22 @@
           if (birth) events.push(birth);
         }
       }
+    }
+
+    /* -- song carries: a singer in the storm steadies every heart nearby -- */
+    if (storm) {
+      alive.forEach(function (singer) {
+        if (knowsOf(singer).indexOf('song') === -1 || singer.act !== 'shelter') return;
+        alive.forEach(function (listener) {
+          if (listener.id === singer.id) return;
+          var sd = Math.sqrt((listener.x - singer.x) * (listener.x - singer.x) +
+            (listener.y - singer.y) * (listener.y - singer.y));
+          if (sd < 0.12) {
+            listener.energy = Math.min(1, listener.energy + ENERGY_DECAY_PER_SEC * 0.75 * dt);
+            listener.trust[singer.id] = Math.min(1, (listener.trust[singer.id] || 0) + 0.01);
+          }
+        });
+      });
     }
 
     /* -- seed-keepers garden: one planting a day, identical in every copy -- */
@@ -1495,6 +1571,7 @@
         chronicle(w, 'born', 'The emissaries ' + child.bornOfMerge.parents[0] + ' and ' +
           child.bornOfMerge.parents[1] + ' met at the meeting stone. A child was born of the two worlds: ' +
           child.given + '.', 'bk' + childId, sortedIds[0]);
+        greetNewKind(w, child, sortedIds[0]);
       }
 
       // Language contact: where the two tongues named the same thing
@@ -1654,6 +1731,9 @@
     learn: learn,
     keeperPlant: keeperPlant,
     familiesOf: familiesOf,
+    kindOf: kindOf,
+    greetNewKind: greetNewKind,
+    skillName: skillName,
     plantLabel: plantLabel,
     mergeWorlds: mergeWorlds,
     WATER_COOLDOWN: WATER_COOLDOWN,

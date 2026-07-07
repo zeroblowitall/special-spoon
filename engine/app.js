@@ -79,6 +79,7 @@
   var openModal = null;  // 'merge' | 'chronicle' | 'about' | 'worlds' | 'lexicon' | 'families' | null
   var lastWxKind = null; // re-render when the weather turns
   var beacon = null;     // { x, y, until } — the player's soft call; never saved
+  var chronicleShowAll = false; // long histories start folded
 
   /* ---------- rendering ---------- */
 
@@ -502,7 +503,10 @@
       kin.push('parent of ' + children.slice(0, 3).map(function (id) { return escapeHtml(W.kithLabel(state.kith[id])); }).join(', ') + (children.length > 3 ? '…' : ''));
     }
     var kinLine = kin.length ? kin.join(' · ') : null;
-    var skillLine = W.knowsOf(k).indexOf('seedkeeping') > -1 ? 'a seed-keeper: it gardens' : null;
+    var skills = [];
+    if (W.knowsOf(k).indexOf('seedkeeping') > -1) skills.push('a seed-keeper: it gardens');
+    if (W.knowsOf(k).indexOf('song') > -1) skills.push('a singer: it sings against the storms');
+    var skillLine = skills.length ? skills.join(' · ') : null;
     var tastes = Object.keys(k.taste || {});
     var tasteLine = null;
     if (tastes.length) {
@@ -520,9 +524,10 @@
       ? '<div class="hybrid-note">✦ Your emissary. When worlds merge, ' + escapeHtml(W.kithLabel(k)) + ' will lead the meeting.</div>'
       : '';
     var standing = W.biomeInfo(W.biomeAt(W.makeTerrain(state.id), k.x, k.y)).name;
+    var kind = W.kindOf(k.genome);
     return '<div id="panel">' +
       '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
-      '<div class="species">a ' + stage + ' kith' + (k.name ? ' · called ' + escapeHtml(k.given) + ' by its kin' : '') + '</div>' +
+      '<div class="species">a ' + stage + ' ' + escapeHtml(kind.name) + ' kith' + (k.name ? ' · called ' + escapeHtml(k.given) + ' by its kin' : '') + '</div>' +
       '<div class="meta">' + ageText + ' · ' + mood + ' · on the ' + standing + '</div>' +
       (tribeLine ? '<div class="meta">' + tribeLine + '</div>' : '') +
       (kinLine ? '<div class="meta">' + kinLine + '</div>' : '') +
@@ -554,12 +559,18 @@
         '<button class="btn" data-act="export-world">Copy this world as text</button>' +
         '<button class="btn" data-act="close-modal">Close</button></div>';
     } else if (openModal === 'chronicle') {
-      var entries = state.chronicle.slice().reverse().map(function (e) {
+      var allEntries = state.chronicle.slice().reverse();
+      var shown = chronicleShowAll ? allEntries : allEntries.slice(0, 60);
+      var entries = shown.map(function (e) {
         var d = new Date(e.at);
         var when = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
         return '<div class="chronicle-entry kind-' + e.kind + '"><span class="when">' + when +
           '</span><span class="what">' + escapeHtml(e.text) + '</span></div>';
       }).join('');
+      if (!chronicleShowAll && allEntries.length > 60) {
+        entries += '<div class="row"><button class="btn small" data-act="chronicle-all">Show all ' +
+          allEntries.length + ' entries — back to the world\'s first day</button></div>';
+      }
       var lineage = state.lineage.length
         ? '<p class="muted">Woven from: ' + state.lineage.map(function (l) { return escapeHtml(l.name); }).join(', ') + '.</p>'
         : '';
@@ -644,7 +655,7 @@
         '<p><strong>Bless an emissary.</strong> Choose one kith as yours. When worlds merge, your emissary leads the meeting — and the child born of a first meeting is your emissary’s child.</p>' +
         '<p><strong>Set it free.</strong> Press <em>Preserve</em> and the game writes itself into a new file with your world inside. Give copies to people. Their copies will drift.</p>' +
         '<p><strong>Reunite it.</strong> When two copies meet again, merge them. Nothing is ever lost, and every first meeting creates new life.</p>' +
-        '<p class="muted">Your world stays on your device. Nothing is ever sent anywhere. Free to copy and share — that is the point. Source: github.com/zeroblowitall/special-spoon</p>' +
+        '<p class="muted">Your world stays on your device. Nothing is ever sent anywhere. Free to copy and share — that is the point. And remember: a browser can lose its memory; a file cannot. <strong>Preserve often.</strong> Source: github.com/zeroblowitall/special-spoon</p>' +
         '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
     }
     return '<div class="modal-veil" id="veil"><div class="modal" role="dialog" aria-modal="true">' + inner + '</div></div>';
@@ -708,6 +719,7 @@
   function preserveWorld() {
     W.advanceGrowth(state);
     W.chronicle(state, 'preserve', 'The world was preserved and set free as a file.');
+    state.lastPreserve = Date.now();
     save();
     var blob = new Blob([selfHTML()], { type: 'text/html' });
     var a = document.createElement('a');
@@ -805,7 +817,10 @@
           render();
           toast('World preserved. The file you just downloaded IS your world — share copies freely.');
         } else if (act === 'merge' || act === 'chronicle' || act === 'about' || act === 'worlds' || act === 'lexicon' || act === 'families') {
+          if (act === 'chronicle') chronicleShowAll = false;
           openModal = act; render();
+        } else if (act === 'chronicle-all') {
+          chronicleShowAll = true; render();
         } else if (act === 'close-modal') {
           openModal = null; render();
         } else if (act === 'new-world') {
@@ -958,4 +973,12 @@
   boot();
   render();
   announceNews(bootNews);
+
+  // A browser can lose its memory; a file cannot. When a world has real
+  // history and hasn't been preserved lately, say so — once, gently.
+  setTimeout(function () {
+    if (state.clock > 60 && (!state.lastPreserve || Date.now() - state.lastPreserve > 24 * 3600 * 1000)) {
+      toast('This world has history worth keeping. Press Preserve — the file is the only copy that can never be lost.');
+    }
+  }, 9000);
 })();

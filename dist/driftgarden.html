@@ -290,6 +290,7 @@ html, body {
 .chronicle-entry.kind-passing .what { color: var(--ink-soft); font-style: italic; }
 .chronicle-entry.kind-strife .what { color: #d99a6c; }
 .chronicle-entry.kind-discovery .what { color: var(--good); }
+.chronicle-entry.kind-kind .what { color: var(--accent); }
 
 /* Toasts */
 #toast {
@@ -327,7 +328,7 @@ html, body {
 <body>
 <noscript><p style="padding:2rem;font-family:sans-serif">Driftgarden needs JavaScript to live. No internet connection is required — just JavaScript.</p></noscript>
 <div id="stage"></div>
-<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.8.0 */;</script>
+<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.9.0 */;</script>
 <script id="dg-world">
 /* Driftgarden — world logic.
  * Everything that is TRUE about a world lives here: genomes, growth, kith,
@@ -726,6 +727,13 @@ html, body {
 
   function knowsOf(k) { return k.knows || []; }
 
+  var SKILL_NAMES = {
+    seedkeeping: 'the way of seed-keeping',
+    song: 'the song'
+  };
+
+  function skillName(skill) { return SKILL_NAMES[skill] || skill; }
+
   function learn(w, k, skill) {
     if (knowsOf(k).indexOf(skill) > -1) return false;
     k.knows = knowsOf(k).concat([skill]);
@@ -774,6 +782,39 @@ html, body {
     chronicle(w, 'plant', kithLabel(k) + ' planted a ' + species + ' seed in the ' +
       BIOMES[biomeAt(terrain, spot.x, spot.y)].name + '. The garden grows itself now.', 'gp' + plantId);
     return plant;
+  }
+
+  /* ---------- kinds: speciation you can see ----------
+   * A kith's kind is a pure function of its visible morphology, identical
+   * in every copy of every world. Inheritance keeps children close to their
+   * parents' kind; mutation eventually crosses a boundary — and a world
+   * greets the first of a kind it has never seen. */
+
+  var HUE_KIND_WORDS = ['Ember', 'Gold', 'Moss', 'Lake', 'Dusk', 'Rose'];
+  var EAR_KIND_WORDS = ['Smoothbrow', 'Tuftear', 'Longear'];
+
+  function kindOf(genome) {
+    var hueBand = Math.floor((((genome.hue % 360) + 360) % 360) / 60);
+    var ears = Math.max(0, Math.min(2, genome.ears || 0));
+    return {
+      key: hueBand + '-' + ears,
+      name: HUE_KIND_WORDS[hueBand] + ' ' + EAR_KIND_WORDS[ears]
+    };
+  }
+
+  // Called with a newborn already in w.kith: is it the first of its kind
+  // among the living here? Chronicled with a deterministic id, so drifted
+  // copies that both witness the birth remember one arrival, not two.
+  function greetNewKind(w, child, fixedWorld) {
+    var kind = kindOf(child.genome);
+    var already = livingKith(w).some(function (k) {
+      return k.id !== child.id && kindOf(k.genome).key === kind.key;
+    });
+    if (already) return null;
+    var text = 'A kith of a new kind: ' + child.given + ', the first ' + kind.name +
+      ' this world has seen.';
+    chronicle(w, 'kind', text, 'nk' + child.id, fixedWorld);
+    return { kind: 'kind', text: text };
   }
 
   /* Family lines, derived from parenthood: the roots are kith with no
@@ -1313,6 +1354,7 @@ html, body {
     a.u = bumpClock(w); b.u = bumpClock(w);
     var text = kithLabel(parents[0]) + ' and ' + kithLabel(parents[1]) + ' had a child: ' + child.given + '.';
     chronicle(w, 'born', text, 'b' + childId);
+    greetNewKind(w, child);
     return { kind: 'born', text: text, child: child };
   }
 
@@ -1378,7 +1420,26 @@ html, body {
       if (k.act === 'rest' || k.act === 'shelter') {
         if (k.act === 'shelter' && !storm) { k.act = 'wander'; k.tx = null; }
         else if (k.act === 'rest' && now >= k.actUntil) { k.act = 'wander'; k.tx = null; }
-        else if (k.act === 'shelter') return;
+        else if (k.act === 'shelter') {
+          // huddled together against the weather: where song is born
+          var huddled = alive.some(function (o) {
+            return o.id !== k.id && o.act === 'shelter' &&
+              Math.abs(o.x - k.x) < 0.08 && Math.abs(o.y - k.y) < 0.08;
+          });
+          if (huddled && knowsOf(k).indexOf('song') === -1 &&
+              k.brain.patience > 0.65 && k.brain.sociability > 0.6 && rng() < 0.08) {
+            learn(w, k, 'song');
+            var songText = 'In the middle of the storm, ' + kithLabel(k) +
+              ' began to sing — the first song this world has heard.';
+            chronicle(w, 'discovery', songText, 'ds' + k.id);
+            events.push({ kind: 'discovery', text: songText });
+          }
+          if (knowsOf(k).indexOf('song') > -1) {
+            k.saying = '♪ ' + attendConcept(w, k, 'song').word;
+            k.sayingUntil = now + 3500;
+          }
+          return;
+        }
         else return;
       }
 
@@ -1550,7 +1611,7 @@ html, body {
             var lesson = knowsOf(teacher).filter(function (s) { return knowsOf(pupil).indexOf(s) === -1; })[0];
             if (lesson && pupil.brain.curiosity > 0.35) {
               learn(w, pupil, lesson);
-              var taughtText = kithLabel(teacher) + ' taught ' + kithLabel(pupil) + ' the way of seed-keeping.';
+              var taughtText = kithLabel(teacher) + ' taught ' + kithLabel(pupil) + ' ' + skillName(lesson) + '.';
               chronicle(w, 'discovery', taughtText, 'dt' + pupil.id + lesson);
               events.push({ kind: 'discovery', text: taughtText });
               break;
@@ -1583,6 +1644,22 @@ html, body {
           if (birth) events.push(birth);
         }
       }
+    }
+
+    /* -- song carries: a singer in the storm steadies every heart nearby -- */
+    if (storm) {
+      alive.forEach(function (singer) {
+        if (knowsOf(singer).indexOf('song') === -1 || singer.act !== 'shelter') return;
+        alive.forEach(function (listener) {
+          if (listener.id === singer.id) return;
+          var sd = Math.sqrt((listener.x - singer.x) * (listener.x - singer.x) +
+            (listener.y - singer.y) * (listener.y - singer.y));
+          if (sd < 0.12) {
+            listener.energy = Math.min(1, listener.energy + ENERGY_DECAY_PER_SEC * 0.75 * dt);
+            listener.trust[singer.id] = Math.min(1, (listener.trust[singer.id] || 0) + 0.01);
+          }
+        });
+      });
     }
 
     /* -- seed-keepers garden: one planting a day, identical in every copy -- */
@@ -1826,6 +1903,7 @@ html, body {
         chronicle(w, 'born', 'The emissaries ' + child.bornOfMerge.parents[0] + ' and ' +
           child.bornOfMerge.parents[1] + ' met at the meeting stone. A child was born of the two worlds: ' +
           child.given + '.', 'bk' + childId, sortedIds[0]);
+        greetNewKind(w, child, sortedIds[0]);
       }
 
       // Language contact: where the two tongues named the same thing
@@ -1985,6 +2063,9 @@ html, body {
     learn: learn,
     keeperPlant: keeperPlant,
     familiesOf: familiesOf,
+    kindOf: kindOf,
+    greetNewKind: greetNewKind,
+    skillName: skillName,
     plantLabel: plantLabel,
     mergeWorlds: mergeWorlds,
     WATER_COOLDOWN: WATER_COOLDOWN,
@@ -2075,6 +2156,7 @@ html, body {
   var openModal = null;  // 'merge' | 'chronicle' | 'about' | 'worlds' | 'lexicon' | 'families' | null
   var lastWxKind = null; // re-render when the weather turns
   var beacon = null;     // { x, y, until } — the player's soft call; never saved
+  var chronicleShowAll = false; // long histories start folded
 
   /* ---------- rendering ---------- */
 
@@ -2498,7 +2580,10 @@ html, body {
       kin.push('parent of ' + children.slice(0, 3).map(function (id) { return escapeHtml(W.kithLabel(state.kith[id])); }).join(', ') + (children.length > 3 ? '…' : ''));
     }
     var kinLine = kin.length ? kin.join(' · ') : null;
-    var skillLine = W.knowsOf(k).indexOf('seedkeeping') > -1 ? 'a seed-keeper: it gardens' : null;
+    var skills = [];
+    if (W.knowsOf(k).indexOf('seedkeeping') > -1) skills.push('a seed-keeper: it gardens');
+    if (W.knowsOf(k).indexOf('song') > -1) skills.push('a singer: it sings against the storms');
+    var skillLine = skills.length ? skills.join(' · ') : null;
     var tastes = Object.keys(k.taste || {});
     var tasteLine = null;
     if (tastes.length) {
@@ -2516,9 +2601,10 @@ html, body {
       ? '<div class="hybrid-note">✦ Your emissary. When worlds merge, ' + escapeHtml(W.kithLabel(k)) + ' will lead the meeting.</div>'
       : '';
     var standing = W.biomeInfo(W.biomeAt(W.makeTerrain(state.id), k.x, k.y)).name;
+    var kind = W.kindOf(k.genome);
     return '<div id="panel">' +
       '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
-      '<div class="species">a ' + stage + ' kith' + (k.name ? ' · called ' + escapeHtml(k.given) + ' by its kin' : '') + '</div>' +
+      '<div class="species">a ' + stage + ' ' + escapeHtml(kind.name) + ' kith' + (k.name ? ' · called ' + escapeHtml(k.given) + ' by its kin' : '') + '</div>' +
       '<div class="meta">' + ageText + ' · ' + mood + ' · on the ' + standing + '</div>' +
       (tribeLine ? '<div class="meta">' + tribeLine + '</div>' : '') +
       (kinLine ? '<div class="meta">' + kinLine + '</div>' : '') +
@@ -2550,12 +2636,18 @@ html, body {
         '<button class="btn" data-act="export-world">Copy this world as text</button>' +
         '<button class="btn" data-act="close-modal">Close</button></div>';
     } else if (openModal === 'chronicle') {
-      var entries = state.chronicle.slice().reverse().map(function (e) {
+      var allEntries = state.chronicle.slice().reverse();
+      var shown = chronicleShowAll ? allEntries : allEntries.slice(0, 60);
+      var entries = shown.map(function (e) {
         var d = new Date(e.at);
         var when = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
         return '<div class="chronicle-entry kind-' + e.kind + '"><span class="when">' + when +
           '</span><span class="what">' + escapeHtml(e.text) + '</span></div>';
       }).join('');
+      if (!chronicleShowAll && allEntries.length > 60) {
+        entries += '<div class="row"><button class="btn small" data-act="chronicle-all">Show all ' +
+          allEntries.length + ' entries — back to the world\'s first day</button></div>';
+      }
       var lineage = state.lineage.length
         ? '<p class="muted">Woven from: ' + state.lineage.map(function (l) { return escapeHtml(l.name); }).join(', ') + '.</p>'
         : '';
@@ -2640,7 +2732,7 @@ html, body {
         '<p><strong>Bless an emissary.</strong> Choose one kith as yours. When worlds merge, your emissary leads the meeting — and the child born of a first meeting is your emissary’s child.</p>' +
         '<p><strong>Set it free.</strong> Press <em>Preserve</em> and the game writes itself into a new file with your world inside. Give copies to people. Their copies will drift.</p>' +
         '<p><strong>Reunite it.</strong> When two copies meet again, merge them. Nothing is ever lost, and every first meeting creates new life.</p>' +
-        '<p class="muted">Your world stays on your device. Nothing is ever sent anywhere. Free to copy and share — that is the point. Source: github.com/zeroblowitall/special-spoon</p>' +
+        '<p class="muted">Your world stays on your device. Nothing is ever sent anywhere. Free to copy and share — that is the point. And remember: a browser can lose its memory; a file cannot. <strong>Preserve often.</strong> Source: github.com/zeroblowitall/special-spoon</p>' +
         '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
     }
     return '<div class="modal-veil" id="veil"><div class="modal" role="dialog" aria-modal="true">' + inner + '</div></div>';
@@ -2704,6 +2796,7 @@ html, body {
   function preserveWorld() {
     W.advanceGrowth(state);
     W.chronicle(state, 'preserve', 'The world was preserved and set free as a file.');
+    state.lastPreserve = Date.now();
     save();
     var blob = new Blob([selfHTML()], { type: 'text/html' });
     var a = document.createElement('a');
@@ -2801,7 +2894,10 @@ html, body {
           render();
           toast('World preserved. The file you just downloaded IS your world — share copies freely.');
         } else if (act === 'merge' || act === 'chronicle' || act === 'about' || act === 'worlds' || act === 'lexicon' || act === 'families') {
+          if (act === 'chronicle') chronicleShowAll = false;
           openModal = act; render();
+        } else if (act === 'chronicle-all') {
+          chronicleShowAll = true; render();
         } else if (act === 'close-modal') {
           openModal = null; render();
         } else if (act === 'new-world') {
@@ -2954,6 +3050,14 @@ html, body {
   boot();
   render();
   announceNews(bootNews);
+
+  // A browser can lose its memory; a file cannot. When a world has real
+  // history and hasn't been preserved lately, say so — once, gently.
+  setTimeout(function () {
+    if (state.clock > 60 && (!state.lastPreserve || Date.now() - state.lastPreserve > 24 * 3600 * 1000)) {
+      toast('This world has history worth keeping. Press Preserve — the file is the only copy that can never be lost.');
+    }
+  }, 9000);
 })();
 
 </script>

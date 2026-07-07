@@ -640,7 +640,79 @@ check('parents found as roots', familyTree.roots.length >= 2);
 check('the child hangs from its parent', familyTree.childrenOf[pa.id] && familyTree.childrenOf[pa.id].length === 1);
 check('childless bystanders are not family roots', familyTree.roots.every(r => familyTree.childrenOf[r.id]));
 
-/* ---------- 20. extractWorld round-trip ---------- */
+/* ---------- 20. kinds: speciation you can see ---------- */
+
+console.log('kinds');
+const kindA = W.kindOf({ hue: 30, ears: 2, size: 1 });
+const kindB = W.kindOf({ hue: 45, ears: 2, size: 1 });
+const kindC = W.kindOf({ hue: 250, ears: 0, size: 1 });
+check('nearby hues share a kind', kindA.key === kindB.key);
+check('distant morphology is another kind', kindA.key !== kindC.key);
+check('kinds have names', kindA.name.indexOf('Ember') === 0 && kindC.name.indexOf('Dusk') === 0);
+
+const kindWorld = W.newWorld();
+Object.values(kindWorld.kith).forEach(k => { k.genome.hue = 100; k.genome.ears = 1; }); // all one kind
+const stranger = clone(Object.values(kindWorld.kith)[0]);
+stranger.id = 'idstranger00001';
+stranger.given = 'Novel';
+stranger.genome = { ...stranger.genome, hue: 250, ears: 0 };
+kindWorld.kith[stranger.id] = stranger;
+const greeting = W.greetNewKind(kindWorld, stranger);
+check('the first of a kind is greeted', !!greeting && greeting.text.indexOf('new kind') > -1);
+const stranger2 = clone(stranger);
+stranger2.id = 'idstranger00002';
+kindWorld.kith[stranger2.id] = stranger2;
+check('the second of a kind is not', W.greetNewKind(kindWorld, stranger2) === null);
+check('the greeting has a deterministic id', kindWorld.chronicle.some(e => e.id === 'nk' + stranger.id));
+
+/* ---------- 21. song ---------- */
+
+console.log('song');
+let stormyWorld = W.newWorld();
+let stormyNow = fakeNow;
+outer:
+for (let tries = 0; tries < 40; tries++) {
+  for (let h = 0; h < 48; h += 2) {
+    if (W.weatherAt(stormyWorld.id, fakeNow + h * 3600 * 1000).kind === 'storm') {
+      stormyNow = fakeNow + h * 3600 * 1000;
+      break outer;
+    }
+  }
+  stormyWorld = W.newWorld();
+}
+const savedNow2 = fakeNow;
+fakeNow = stormyNow;
+const shelterers = Object.values(stormyWorld.kith);
+shelterers.forEach((k, i) => {
+  k.act = 'shelter';
+  k.x = 0.5 + i * 0.02; k.y = 0.8;
+  k.brain.patience = 0.9; k.brain.sociability = 0.9;
+  k.energy = 0.5;
+});
+let sang = false;
+for (let t = 0; t < 60 && !sang; t++) {
+  W.kithTick(stormyWorld, 2);
+  fakeNow += 2000;
+  sang = shelterers.some(k => W.knowsOf(k).indexOf('song') > -1);
+}
+check('song is born in the storm', sang);
+check('the first song is chronicled', stormyWorld.chronicle.some(e => e.text.indexOf('the first song') > -1));
+const singer = shelterers.find(k => W.knowsOf(k).indexOf('song') > -1);
+if (singer) {
+  const listener = shelterers.find(k => k.id !== singer.id);
+  const trustBefore = listener.trust[singer.id] || 0;
+  const energyBefore = listener.energy;
+  singer.act = 'shelter'; listener.act = 'shelter';
+  for (let t = 0; t < 5; t++) { W.kithTick(stormyWorld, 2); fakeNow += 2000; }
+  check('the song steadies hearts nearby', (listener.trust[singer.id] || 0) > trustBefore);
+  check('the singer sings', typeof singer.saying === 'string' && singer.saying.indexOf('♪') === 0);
+} else {
+  check('the song steadies hearts nearby', false, 'no singer emerged');
+  check('the singer sings', false, 'no singer emerged');
+}
+fakeNow = savedNow2;
+
+/* ---------- 22. extractWorld round-trip ---------- */
 
 console.log('extraction');
 const json = JSON.stringify(A).replace(/</g, '\\u003c');
