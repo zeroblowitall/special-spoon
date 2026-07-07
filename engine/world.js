@@ -252,6 +252,108 @@
     return ((hash32(kithId + '~' + species) % 201) - 100) / 100; // -1..1
   }
 
+  /* ---------- language: the naming game ----------
+   * Kith coin words for the things they attend to, in their own voice.
+   * A kith always coins the SAME word for the same concept (seeded by its
+   * identity), so coinages reconcile across copies like everything else.
+   * Words spread through encounters: agreement reinforces, disagreement
+   * ends with the weaker speaker adopting — Steels' naming game, and the
+   * population converges on a shared tongue. Each world converges on its
+   * OWN tongue; merges are language contact. */
+
+  var LEX_CAP = 16;
+
+  function coinWord(k, concept) {
+    var rng = mulberry32(hash32(k.id + ':word:' + concept));
+    var word = '';
+    var syllables = 1 + Math.floor(rng() * 2);
+    for (var i = 0; i <= syllables; i++) {
+      word += SYL_OPEN[k.genome.voice[Math.floor(rng() * k.genome.voice.length)] % SYL_OPEN.length];
+    }
+    if (rng() < 0.4) word += pick(rng, SYL_CLOSE);
+    return word;
+  }
+
+  function attendConcept(w, k, concept) {
+    if (!k.lex) k.lex = {};
+    if (k.lex[concept]) return k.lex[concept];
+    k.lex[concept] = { word: coinWord(k, concept), s: 0.3, by: k.id };
+    // cap the vocabulary; the faintest word fades first, deterministically
+    var concepts = Object.keys(k.lex);
+    if (concepts.length > LEX_CAP) {
+      concepts.sort(function (a, b) { return k.lex[a].s - k.lex[b].s || (a < b ? -1 : 1); });
+      delete k.lex[concepts[0]];
+    }
+    k.u = bumpClock(w);
+    return k.lex[concept];
+  }
+
+  function speakBetween(w, speaker, listener, concept, now) {
+    var said = attendConcept(w, speaker, concept);
+    var heard = attendConcept(w, listener, concept);
+    if (said.word === heard.word) {
+      said.s = Math.min(1, said.s + 0.15);   // agreement: the word takes root
+      heard.s = Math.min(1, heard.s + 0.15);
+    } else if (said.s >= heard.s) {
+      // the surer voice carries; the coiner's name travels with the word
+      listener.lex[concept] = { word: said.word, s: 0.25, by: said.by };
+      said.s = Math.min(1, said.s + 0.1);
+      listener.u = bumpClock(w);
+    } else {
+      said.s = Math.max(0.05, said.s - 0.05); // spoke, but wasn't followed
+    }
+    speaker.saying = said.word;
+    speaker.sayingUntil = now + 3500;
+    return said.word;
+  }
+
+  function conceptLabel(concept) {
+    if (concept.indexOf('plant:') === 0) return 'the ' + concept.slice(6);
+    return {
+      home: 'this world', rain: 'the rain', storm: 'the storm',
+      mist: 'the mist', sun: 'the sun', water: 'the water'
+    }[concept] || concept;
+  }
+
+  // The world's tongue: every living voice tallied, strongest words first.
+  function worldLexicon(w) {
+    var tally = {};
+    livingKith(w).forEach(function (k) {
+      Object.keys(k.lex || {}).forEach(function (concept) {
+        var entry = k.lex[concept];
+        if (!tally[concept]) tally[concept] = {};
+        if (!tally[concept][entry.word]) tally[concept][entry.word] = { weight: 0, by: entry.by };
+        tally[concept][entry.word].weight += entry.s;
+      });
+    });
+    var out = {};
+    Object.keys(tally).forEach(function (concept) {
+      out[concept] = Object.keys(tally[concept]).map(function (word) {
+        return { word: word, weight: tally[concept][word].weight, by: tally[concept][word].by };
+      }).sort(function (a, b) { return b.weight - a.weight || (a.word < b.word ? -1 : 1); });
+    });
+    return out;
+  }
+
+  var WHISPER_COOLDOWN = 20 * 3600 * 1000;
+
+  function whisperWord(w, concept, rawWord) {
+    var word = String(rawWord || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 10);
+    if (!word || word.length < 2) return { ok: false, why: 'A whisper needs a small, simple word.' };
+    if (w.whispered && env.now() - w.whispered < WHISPER_COOLDOWN) {
+      return { ok: false, why: 'The world can only hold one whisper a day.' };
+    }
+    var e = w.emissary && w.kith[w.emissary];
+    if (!e || e.passed) return { ok: false, why: 'Whispers need a living emissary to hear them.' };
+    if (!e.lex) e.lex = {};
+    e.lex[concept] = { word: word, s: 1, by: 'whisper' };
+    e.u = bumpClock(w);
+    w.whispered = env.now();
+    chronicle(w, 'kith', 'Something on the wind whispered to ' + kithLabel(e) + ', who now calls ' +
+      conceptLabel(concept) + ' “' + word + '”.');
+    return { ok: true, word: word };
+  }
+
   /* ---------- the land ----------
    * Terrain is IDENTITY, not content: it is derived purely from the world's
    * id, never stored, never merged. When worlds merge, travellers arrive
@@ -620,6 +722,7 @@
       starving: null,
       taste: {},              // plantSpecies -> learned liking
       trust: {},              // kithId -> learned trust; >= 0.5 is a bond
+      lex: {},                // concept -> {word, s, by}: its share of the tongue
       x: spot.x,
       y: spot.y,
       tx: null, ty: null,     // wander target (ephemeral, not clocked)
@@ -657,6 +760,7 @@
         k.taste = {};
         k.trust = {};
       }
+      if (!k.lex) k.lex = {}; // kith from before language grow a voice
     });
   }
 
@@ -781,6 +885,7 @@
           if (plant) {
             var liking = inbornLiking(k.id, plant.species);
             meal = 0.45 + liking * 0.3;
+            attendConcept(w, k, 'plant:' + plant.species); // a thing eaten is a thing named
             var learned = (k.taste[plant.species] === undefined);
             k.taste[plant.species] = liking; // it now KNOWS how this tastes
             if (learned) {
@@ -929,6 +1034,23 @@
             delete kk.trust[known[0]];
           }
         });
+        // chatter: what is nearby is what gets named
+        if (rng() < 0.4) {
+          var wx2 = weatherAt(w.id, now).kind;
+          var concept = null;
+          var nearestSpecies = null, nearestPd = 0.15;
+          Object.keys(w.plants).forEach(function (pid) {
+            var p2 = w.plants[pid];
+            var pd = Math.sqrt((p2.x - ka.x) * (p2.x - ka.x) + (p2.y - ka.y) * (p2.y - ka.y));
+            if (pd < nearestPd) { nearestPd = pd; nearestSpecies = p2.species; }
+          });
+          if (nearestSpecies && rng() < 0.6) concept = 'plant:' + nearestSpecies;
+          else if (wx2 !== 'clear' && wx2 !== 'breeze' && rng() < 0.6) concept = wx2;
+          else concept = rng() < 0.5 ? 'home' : (rng() < 0.5 ? 'sun' : 'water');
+          var roles = rng() < 0.5 ? [ka, kb] : [kb, ka];
+          speakBetween(w, roles[0], roles[1], concept, now);
+        }
+
         // courting: two bonded, hale, grown kith in fair weather
         if (!storm && ka.trust[kb.id] >= 0.5 && kb.trust[ka.id] >= 0.5 &&
             ka.energy > 0.65 && kb.energy > 0.65 &&
@@ -1071,6 +1193,9 @@
     var theirPlantParent = proudestPlant(other.plants);
     var ourEmissary = mergeSide(w, other);
     var theirEmissary = mergeSide(other, w);
+    // Each side's tongue, as it was before the meeting — for the record.
+    var ourTongue = worldLexicon(w);
+    var theirTongue = worldLexicon({ kith: other.kith || {} });
 
     var weKnowThem = w.lineage.some(function (l) { return l.id === other.id; });
     var theyKnowUs = (other.lineage || []).some(function (l) { return l.id === w.id; });
@@ -1141,6 +1266,7 @@
           starving: null,
           taste: {},
           trust: {},
+          lex: {},
           x: 0.45 + rng() * 0.1,
           y: 0.7 + rng() * 0.1,
           tx: null, ty: null,
@@ -1153,6 +1279,22 @@
         chronicle(w, 'born', 'The emissaries ' + child.bornOfMerge.parents[0] + ' and ' +
           child.bornOfMerge.parents[1] + ' met at the meeting stone. A child was born of the two worlds: ' +
           child.given + '.', 'bk' + childId, sortedIds[0]);
+      }
+
+      // Language contact: where the two tongues named the same thing
+      // differently, the chronicle keeps the moment of first hearing.
+      var sharedConcepts = Object.keys(ourTongue).filter(function (c) {
+        return theirTongue[c] && ourTongue[c][0] && theirTongue[c][0] &&
+          ourTongue[c][0].word !== theirTongue[c][0].word;
+      }).sort();
+      if (sharedConcepts.length > 0) {
+        var contactConcept = sharedConcepts[0];
+        var wordPair = w.id < other.id
+          ? [ourTongue[contactConcept][0].word, theirTongue[contactConcept][0].word]
+          : [theirTongue[contactConcept][0].word, ourTongue[contactConcept][0].word];
+        chronicle(w, 'kith', 'In ' + canonicalNames[0] + ' they call ' + conceptLabel(contactConcept) +
+          ' “' + wordPair[0] + '”; in ' + canonicalNames[1] + ' it is “' + wordPair[1] +
+          '”. Both words live here now.', 'lx' + sortedIds.join('') + '-' + mergeClock, sortedIds[0]);
       }
 
       // The gardens cross too.
@@ -1284,6 +1426,12 @@
     checkMortality: checkMortality,
     catchUp: catchUp,
     inbornLiking: inbornLiking,
+    coinWord: coinWord,
+    attendConcept: attendConcept,
+    speakBetween: speakBetween,
+    worldLexicon: worldLexicon,
+    conceptLabel: conceptLabel,
+    whisperWord: whisperWord,
     plantLabel: plantLabel,
     mergeWorlds: mergeWorlds,
     WATER_COOLDOWN: WATER_COOLDOWN,

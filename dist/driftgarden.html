@@ -196,6 +196,21 @@ html, body {
 .chronicle-entry.kind-merge .what { color: var(--accent); }
 .chronicle-entry.kind-born .what { color: var(--good); }
 
+/* Speech */
+.kith-speech {
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 11px;
+  fill: #fff;
+  paint-order: stroke;
+  stroke: rgba(10, 14, 11, 0.55);
+  stroke-width: 2.5px;
+  text-anchor: middle;
+  pointer-events: none;
+  opacity: 0.95;
+}
+.lex-word { font-family: Georgia, serif; font-style: italic; font-size: 1.05rem; color: var(--accent); }
+
 /* Weather */
 .raindrop {
   stroke: rgba(195, 215, 245, 0.5);
@@ -292,7 +307,7 @@ html, body {
 <body>
 <noscript><p style="padding:2rem;font-family:sans-serif">Driftgarden needs JavaScript to live. No internet connection is required — just JavaScript.</p></noscript>
 <div id="stage"></div>
-<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.5.0 */;</script>
+<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.6.0 */;</script>
 <script id="dg-world">
 /* Driftgarden — world logic.
  * Everything that is TRUE about a world lives here: genomes, growth, kith,
@@ -546,6 +561,108 @@ html, body {
   // of physiology, identical in every copy of the world.
   function inbornLiking(kithId, species) {
     return ((hash32(kithId + '~' + species) % 201) - 100) / 100; // -1..1
+  }
+
+  /* ---------- language: the naming game ----------
+   * Kith coin words for the things they attend to, in their own voice.
+   * A kith always coins the SAME word for the same concept (seeded by its
+   * identity), so coinages reconcile across copies like everything else.
+   * Words spread through encounters: agreement reinforces, disagreement
+   * ends with the weaker speaker adopting — Steels' naming game, and the
+   * population converges on a shared tongue. Each world converges on its
+   * OWN tongue; merges are language contact. */
+
+  var LEX_CAP = 16;
+
+  function coinWord(k, concept) {
+    var rng = mulberry32(hash32(k.id + ':word:' + concept));
+    var word = '';
+    var syllables = 1 + Math.floor(rng() * 2);
+    for (var i = 0; i <= syllables; i++) {
+      word += SYL_OPEN[k.genome.voice[Math.floor(rng() * k.genome.voice.length)] % SYL_OPEN.length];
+    }
+    if (rng() < 0.4) word += pick(rng, SYL_CLOSE);
+    return word;
+  }
+
+  function attendConcept(w, k, concept) {
+    if (!k.lex) k.lex = {};
+    if (k.lex[concept]) return k.lex[concept];
+    k.lex[concept] = { word: coinWord(k, concept), s: 0.3, by: k.id };
+    // cap the vocabulary; the faintest word fades first, deterministically
+    var concepts = Object.keys(k.lex);
+    if (concepts.length > LEX_CAP) {
+      concepts.sort(function (a, b) { return k.lex[a].s - k.lex[b].s || (a < b ? -1 : 1); });
+      delete k.lex[concepts[0]];
+    }
+    k.u = bumpClock(w);
+    return k.lex[concept];
+  }
+
+  function speakBetween(w, speaker, listener, concept, now) {
+    var said = attendConcept(w, speaker, concept);
+    var heard = attendConcept(w, listener, concept);
+    if (said.word === heard.word) {
+      said.s = Math.min(1, said.s + 0.15);   // agreement: the word takes root
+      heard.s = Math.min(1, heard.s + 0.15);
+    } else if (said.s >= heard.s) {
+      // the surer voice carries; the coiner's name travels with the word
+      listener.lex[concept] = { word: said.word, s: 0.25, by: said.by };
+      said.s = Math.min(1, said.s + 0.1);
+      listener.u = bumpClock(w);
+    } else {
+      said.s = Math.max(0.05, said.s - 0.05); // spoke, but wasn't followed
+    }
+    speaker.saying = said.word;
+    speaker.sayingUntil = now + 3500;
+    return said.word;
+  }
+
+  function conceptLabel(concept) {
+    if (concept.indexOf('plant:') === 0) return 'the ' + concept.slice(6);
+    return {
+      home: 'this world', rain: 'the rain', storm: 'the storm',
+      mist: 'the mist', sun: 'the sun', water: 'the water'
+    }[concept] || concept;
+  }
+
+  // The world's tongue: every living voice tallied, strongest words first.
+  function worldLexicon(w) {
+    var tally = {};
+    livingKith(w).forEach(function (k) {
+      Object.keys(k.lex || {}).forEach(function (concept) {
+        var entry = k.lex[concept];
+        if (!tally[concept]) tally[concept] = {};
+        if (!tally[concept][entry.word]) tally[concept][entry.word] = { weight: 0, by: entry.by };
+        tally[concept][entry.word].weight += entry.s;
+      });
+    });
+    var out = {};
+    Object.keys(tally).forEach(function (concept) {
+      out[concept] = Object.keys(tally[concept]).map(function (word) {
+        return { word: word, weight: tally[concept][word].weight, by: tally[concept][word].by };
+      }).sort(function (a, b) { return b.weight - a.weight || (a.word < b.word ? -1 : 1); });
+    });
+    return out;
+  }
+
+  var WHISPER_COOLDOWN = 20 * 3600 * 1000;
+
+  function whisperWord(w, concept, rawWord) {
+    var word = String(rawWord || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 10);
+    if (!word || word.length < 2) return { ok: false, why: 'A whisper needs a small, simple word.' };
+    if (w.whispered && env.now() - w.whispered < WHISPER_COOLDOWN) {
+      return { ok: false, why: 'The world can only hold one whisper a day.' };
+    }
+    var e = w.emissary && w.kith[w.emissary];
+    if (!e || e.passed) return { ok: false, why: 'Whispers need a living emissary to hear them.' };
+    if (!e.lex) e.lex = {};
+    e.lex[concept] = { word: word, s: 1, by: 'whisper' };
+    e.u = bumpClock(w);
+    w.whispered = env.now();
+    chronicle(w, 'kith', 'Something on the wind whispered to ' + kithLabel(e) + ', who now calls ' +
+      conceptLabel(concept) + ' “' + word + '”.');
+    return { ok: true, word: word };
   }
 
   /* ---------- the land ----------
@@ -916,6 +1033,7 @@ html, body {
       starving: null,
       taste: {},              // plantSpecies -> learned liking
       trust: {},              // kithId -> learned trust; >= 0.5 is a bond
+      lex: {},                // concept -> {word, s, by}: its share of the tongue
       x: spot.x,
       y: spot.y,
       tx: null, ty: null,     // wander target (ephemeral, not clocked)
@@ -953,6 +1071,7 @@ html, body {
         k.taste = {};
         k.trust = {};
       }
+      if (!k.lex) k.lex = {}; // kith from before language grow a voice
     });
   }
 
@@ -1077,6 +1196,7 @@ html, body {
           if (plant) {
             var liking = inbornLiking(k.id, plant.species);
             meal = 0.45 + liking * 0.3;
+            attendConcept(w, k, 'plant:' + plant.species); // a thing eaten is a thing named
             var learned = (k.taste[plant.species] === undefined);
             k.taste[plant.species] = liking; // it now KNOWS how this tastes
             if (learned) {
@@ -1225,6 +1345,23 @@ html, body {
             delete kk.trust[known[0]];
           }
         });
+        // chatter: what is nearby is what gets named
+        if (rng() < 0.4) {
+          var wx2 = weatherAt(w.id, now).kind;
+          var concept = null;
+          var nearestSpecies = null, nearestPd = 0.15;
+          Object.keys(w.plants).forEach(function (pid) {
+            var p2 = w.plants[pid];
+            var pd = Math.sqrt((p2.x - ka.x) * (p2.x - ka.x) + (p2.y - ka.y) * (p2.y - ka.y));
+            if (pd < nearestPd) { nearestPd = pd; nearestSpecies = p2.species; }
+          });
+          if (nearestSpecies && rng() < 0.6) concept = 'plant:' + nearestSpecies;
+          else if (wx2 !== 'clear' && wx2 !== 'breeze' && rng() < 0.6) concept = wx2;
+          else concept = rng() < 0.5 ? 'home' : (rng() < 0.5 ? 'sun' : 'water');
+          var roles = rng() < 0.5 ? [ka, kb] : [kb, ka];
+          speakBetween(w, roles[0], roles[1], concept, now);
+        }
+
         // courting: two bonded, hale, grown kith in fair weather
         if (!storm && ka.trust[kb.id] >= 0.5 && kb.trust[ka.id] >= 0.5 &&
             ka.energy > 0.65 && kb.energy > 0.65 &&
@@ -1367,6 +1504,9 @@ html, body {
     var theirPlantParent = proudestPlant(other.plants);
     var ourEmissary = mergeSide(w, other);
     var theirEmissary = mergeSide(other, w);
+    // Each side's tongue, as it was before the meeting — for the record.
+    var ourTongue = worldLexicon(w);
+    var theirTongue = worldLexicon({ kith: other.kith || {} });
 
     var weKnowThem = w.lineage.some(function (l) { return l.id === other.id; });
     var theyKnowUs = (other.lineage || []).some(function (l) { return l.id === w.id; });
@@ -1437,6 +1577,7 @@ html, body {
           starving: null,
           taste: {},
           trust: {},
+          lex: {},
           x: 0.45 + rng() * 0.1,
           y: 0.7 + rng() * 0.1,
           tx: null, ty: null,
@@ -1449,6 +1590,22 @@ html, body {
         chronicle(w, 'born', 'The emissaries ' + child.bornOfMerge.parents[0] + ' and ' +
           child.bornOfMerge.parents[1] + ' met at the meeting stone. A child was born of the two worlds: ' +
           child.given + '.', 'bk' + childId, sortedIds[0]);
+      }
+
+      // Language contact: where the two tongues named the same thing
+      // differently, the chronicle keeps the moment of first hearing.
+      var sharedConcepts = Object.keys(ourTongue).filter(function (c) {
+        return theirTongue[c] && ourTongue[c][0] && theirTongue[c][0] &&
+          ourTongue[c][0].word !== theirTongue[c][0].word;
+      }).sort();
+      if (sharedConcepts.length > 0) {
+        var contactConcept = sharedConcepts[0];
+        var wordPair = w.id < other.id
+          ? [ourTongue[contactConcept][0].word, theirTongue[contactConcept][0].word]
+          : [theirTongue[contactConcept][0].word, ourTongue[contactConcept][0].word];
+        chronicle(w, 'kith', 'In ' + canonicalNames[0] + ' they call ' + conceptLabel(contactConcept) +
+          ' “' + wordPair[0] + '”; in ' + canonicalNames[1] + ' it is “' + wordPair[1] +
+          '”. Both words live here now.', 'lx' + sortedIds.join('') + '-' + mergeClock, sortedIds[0]);
       }
 
       // The gardens cross too.
@@ -1580,6 +1737,12 @@ html, body {
     checkMortality: checkMortality,
     catchUp: catchUp,
     inbornLiking: inbornLiking,
+    coinWord: coinWord,
+    attendConcept: attendConcept,
+    speakBetween: speakBetween,
+    worldLexicon: worldLexicon,
+    conceptLabel: conceptLabel,
+    whisperWord: whisperWord,
     plantLabel: plantLabel,
     mergeWorlds: mergeWorlds,
     WATER_COOLDOWN: WATER_COOLDOWN,
@@ -1947,6 +2110,8 @@ html, body {
 
     var label = k.name || (emissary ? k.given : '');
     var labelSvg = label ? '<text class="plant-label" x="0" y="14">' + escapeHtml(label) + '</text>' : '';
+    var saying = (k.saying && k.sayingUntil && now < k.sayingUntil) ? escapeHtml(k.saying) : '';
+    var speechSvg = '<text class="kith-speech" x="0" y="' + (-26 * scale).toFixed(0) + '">' + saying + '</text>';
     var haloSel = sel ? '<circle cx="0" cy="-6" r="16" fill="none" stroke="#ffd166" stroke-width="2" opacity="0.9"/>' : '';
     var haloEmissary = emissary ? '<circle cx="0" cy="-6" r="13" fill="none" stroke="#ffd166" stroke-width="1" stroke-dasharray="2 3" opacity="0.85" class="emissary-ring"/>' : '';
 
@@ -1963,7 +2128,7 @@ html, body {
       eyes + act +
       '<ellipse cx="-3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>' +
       '<ellipse cx="3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>' +
-      '</g></g>' + labelSvg + '</g>';
+      '</g></g>' + labelSvg + speechSvg + '</g>';
   }
 
   // Between full renders, glide the kith to their new positions cheaply.
@@ -1972,11 +2137,14 @@ html, body {
     if (!layer) return;
     var living = W.livingKith(state);
     var missing = false;
+    var now = Date.now();
     living.forEach(function (k) {
       var node = layer.querySelector('[data-kith="' + k.id + '"]');
       if (!node) { missing = true; return; }
       var pos = toScreen(k.x, k.y);
       node.setAttribute('transform', 'translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')');
+      var speech = node.querySelector('.kith-speech');
+      if (speech) speech.textContent = (k.saying && k.sayingUntil && now < k.sayingUntil) ? k.saying : '';
     });
     if (missing || layer.querySelectorAll('.kith-group').length !== living.length) {
       render(); // someone was born, or someone left us — rebuild properly
@@ -1998,6 +2166,7 @@ html, body {
       '<button class="btn primary" data-act="plant">Plant a seed</button>' +
       '<button class="btn" data-act="merge">Merge worlds…</button>' +
       '<button class="btn" data-act="chronicle">Chronicle</button>' +
+      '<button class="btn" data-act="lexicon">Lexicon</button>' +
       '<button class="btn" data-act="preserve">Preserve</button>' +
       '<button class="btn" data-act="worlds" title="Your worlds">⌂</button>' +
       '<button class="btn" data-act="about">?</button>' +
@@ -2121,6 +2290,30 @@ html, body {
         : '';
       inner = '<h2>The Chronicle</h2>' + lineage +
         '<div>' + entries + '</div>' +
+        '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
+    } else if (openModal === 'lexicon') {
+      var tongue = W.worldLexicon(state);
+      var concepts = Object.keys(tongue).sort(function (a, b) {
+        return tongue[b][0].weight - tongue[a][0].weight;
+      });
+      var canWhisper = state.emissary && state.kith[state.emissary] && !state.kith[state.emissary].passed &&
+        (!state.whispered || Date.now() - state.whispered > 20 * 3600 * 1000);
+      var lexRows = concepts.map(function (concept) {
+        var words = tongue[concept];
+        var coiner = words[0].by === 'whisper' ? 'carried on the wind'
+          : (state.kith[words[0].by] ? 'first spoken by ' + escapeHtml(W.kithLabel(state.kith[words[0].by])) : '');
+        var also = words.length > 1
+          ? ' <span class="muted">(also: ' + words.slice(1, 3).map(function (w2) { return '“' + escapeHtml(w2.word) + '”'; }).join(', ') + ')</span>'
+          : '';
+        return '<div class="chronicle-entry"><span class="what">' +
+          escapeHtml(W.conceptLabel(concept)) + ' — <strong class="lex-word">' + escapeHtml(words[0].word) + '</strong>' + also +
+          (coiner ? '<br><span class="muted">' + coiner + '</span>' : '') + '</span>' +
+          '<span class="when">' + (canWhisper ? '<button class="btn small" data-whisper="' + escapeHtml(concept) + '">whisper…</button>' : '') + '</span></div>';
+      }).join('');
+      inner = '<h2>The Lexicon</h2>' +
+        '<p class="muted">The kith are naming their world. Words are coined in each speaker\'s own voice and spread from mouth to mouth; every world converges on a tongue of its own, and when worlds merge, dialects meet.' +
+        (canWhisper ? ' Once a day you may whisper a word to your emissary, and see if it spreads.' : '') + '</p>' +
+        (lexRows || '<p class="muted">No words yet — the kith speak when their paths cross. Listen for the small words above their heads.</p>') +
         '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
     } else if (openModal === 'worlds') {
       var rows = listStoredWorlds().map(function (entry) {
@@ -2316,7 +2509,7 @@ html, body {
           preserveWorld();
           render();
           toast('World preserved. The file you just downloaded IS your world — share copies freely.');
-        } else if (act === 'merge' || act === 'chronicle' || act === 'about' || act === 'worlds') {
+        } else if (act === 'merge' || act === 'chronicle' || act === 'about' || act === 'worlds' || act === 'lexicon') {
           openModal = act; render();
         } else if (act === 'close-modal') {
           openModal = null; render();
@@ -2334,6 +2527,22 @@ html, body {
           box.select();
           try { document.execCommand('copy'); toast('World copied — paste it into another Driftgarden.'); }
           catch (e) { toast('World placed in the box — copy it by hand.'); }
+        }
+      });
+    });
+
+    stage.querySelectorAll('[data-whisper]').forEach(function (node) {
+      node.addEventListener('click', function () {
+        var concept = node.getAttribute('data-whisper');
+        var word = prompt('Whisper a word for ' + W.conceptLabel(concept) + ' (letters only, keep it small):');
+        if (!word) return;
+        var result = W.whisperWord(state, concept, word.trim());
+        if (result.ok) {
+          save();
+          render();
+          toast('You whisper “' + result.word + '”. Whether it spreads is up to them now.');
+        } else {
+          toast(result.why);
         }
       });
     });

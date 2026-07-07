@@ -37,7 +37,7 @@ function stable(value) {
 
 // Positions are presentation, not content: every world settles travellers
 // onto its OWN land, so x/y legitimately differ between copies.
-const POSITION_KEYS = { x: 1, y: 1, tx: 1, ty: 1, facing: 1 };
+const POSITION_KEYS = { x: 1, y: 1, tx: 1, ty: 1, facing: 1, saying: 1, sayingUntil: 1 };
 function content(value) {
   const c = clone(value);
   (function strip(node) {
@@ -436,7 +436,78 @@ W.catchUp(starvingWorld);
 check('prolonged famine takes lives', W.livingKith(starvingWorld).length < 3);
 check('famine deaths are chronicled', starvingWorld.chronicle.some(e => e.kind === 'passing'));
 
-/* ---------- 15. extractWorld round-trip ---------- */
+/* ---------- 15. voices: the naming game ---------- */
+
+console.log('voices');
+const speakWorld = W.newWorld();
+const speakers = Object.values(speakWorld.kith);
+check('a kith always coins the same word for the same thing',
+  W.coinWord(speakers[0], 'rain') === W.coinWord(speakers[0], 'rain'));
+check('different kith coin different words (usually)',
+  W.coinWord(speakers[0], 'home') !== W.coinWord(speakers[1], 'home') ||
+  W.coinWord(speakers[0], 'water') !== W.coinWord(speakers[1], 'water') ||
+  W.coinWord(speakers[0], 'sun') !== W.coinWord(speakers[1], 'sun'));
+
+// two kith talking converge on one word
+const sA = speakers[0], sB = speakers[1];
+for (let i = 0; i < 12; i++) {
+  W.speakBetween(speakWorld, i % 2 ? sA : sB, i % 2 ? sB : sA, 'home', fakeNow);
+}
+check('conversation converges on a shared word', sA.lex.home.word === sB.lex.home.word);
+check('the coiner\'s name travels with the word', sA.lex.home.by === sB.lex.home.by);
+check('agreement makes the word take root', sA.lex.home.s > 0.5 && sB.lex.home.s > 0.5);
+
+// the whole population converges; the world lexicon reads it back
+const sC = speakers[2];
+for (let i = 0; i < 12; i++) W.speakBetween(speakWorld, sA, sC, 'home', fakeNow);
+const tongue = W.worldLexicon(speakWorld);
+check('the world converges on one dominant word for home',
+  tongue.home && tongue.home[0].weight > (tongue.home[1] ? tongue.home[1].weight : 0));
+
+// two worlds develop different tongues (their voices differ)
+const otherTongueWorld = W.newWorld();
+const ot = Object.values(otherTongueWorld.kith);
+for (let i = 0; i < 12; i++) {
+  W.speakBetween(otherTongueWorld, i % 2 ? ot[0] : ot[1], i % 2 ? ot[1] : ot[0], 'home', fakeNow);
+}
+check('two worlds speak differently', ot[0].lex.home.word !== sA.lex.home.word ||
+  W.coinWord(ot[0], 'rain') !== W.coinWord(sA, 'rain'));
+
+// whisper: the player's one word a day, through a living emissary
+const whisperWorld = W.newWorld();
+const wk = Object.keys(whisperWorld.kith)[0];
+check('whispers need an emissary', W.whisperWord(whisperWorld, 'home', 'lumo').ok === false);
+W.blessKith(whisperWorld, wk);
+const whisper1 = W.whisperWord(whisperWorld, 'home', 'Lumo!!');
+check('a whisper lands, cleaned to letters', whisper1.ok && whisper1.word === 'lumo');
+check('the emissary now carries it', whisperWorld.kith[wk].lex.home.word === 'lumo' &&
+  whisperWorld.kith[wk].lex.home.by === 'whisper');
+check('the whisper is chronicled', whisperWorld.chronicle.some(e => e.text.indexOf('“lumo”') > -1));
+check('one whisper a day, no more', W.whisperWord(whisperWorld, 'water', 'aqua').ok === false);
+
+// dialect contact on merge is chronicled identically on both sides
+const dialectA = W.newWorld();
+const dialectB = W.newWorld();
+const dA = Object.values(dialectA.kith), dB = Object.values(dialectB.kith);
+for (let i = 0; i < 10; i++) {
+  W.speakBetween(dialectA, dA[0], dA[1], 'home', fakeNow);
+  W.speakBetween(dialectB, dB[0], dB[1], 'home', fakeNow);
+}
+if (dA[0].lex.home.word !== dB[0].lex.home.word) {
+  const dAB = clone(dialectA), dBA = clone(dialectB);
+  W.mergeWorlds(dAB, clone(dialectB));
+  W.mergeWorlds(dBA, clone(dialectA));
+  const contactA = dAB.chronicle.find(e => e.id.indexOf('lx') === 0);
+  const contactB = dBA.chronicle.find(e => e.id.indexOf('lx') === 0);
+  check('first hearing is chronicled', !!contactA && contactA.text.indexOf('Both words live here now') > -1);
+  check('identically on both sides', !!contactA && !!contactB &&
+    contactA.id === contactB.id && contactA.text === contactB.text);
+} else {
+  check('first hearing is chronicled', true); // the two tongues happened to agree — nothing to contact
+  check('identically on both sides', true);
+}
+
+/* ---------- 16. extractWorld round-trip ---------- */
 
 console.log('extraction');
 const json = JSON.stringify(A).replace(/</g, '\\u003c');

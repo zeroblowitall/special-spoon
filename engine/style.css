@@ -188,6 +188,21 @@ html, body {
 .chronicle-entry.kind-merge .what { color: var(--accent); }
 .chronicle-entry.kind-born .what { color: var(--good); }
 
+/* Speech */
+.kith-speech {
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 11px;
+  fill: #fff;
+  paint-order: stroke;
+  stroke: rgba(10, 14, 11, 0.55);
+  stroke-width: 2.5px;
+  text-anchor: middle;
+  pointer-events: none;
+  opacity: 0.95;
+}
+.lex-word { font-family: Georgia, serif; font-style: italic; font-size: 1.05rem; color: var(--accent); }
+
 /* Weather */
 .raindrop {
   stroke: rgba(195, 215, 245, 0.5);
