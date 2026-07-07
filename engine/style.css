@@ -59,6 +59,21 @@ html, body {
 @keyframes emissaryspin {
   to { transform: rotate(360deg); }
 }
+
+/* Poses: the body language of small lives */
+.kith-group .pose {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transition: transform 0.5s ease;
+}
+.kith-group.act-rest .pose { transform: scale(1.04, 0.88) translateY(1px); }
+.kith-group.act-shelter .pose { transform: scale(1.1, 0.74) translateY(2px); }
+.kith-group.act-eat .pose { transform: rotate(6deg) scale(1, 0.96); }
+.kith-group.moving .pose { animation: waddle 0.55s ease-in-out infinite alternate; }
+@keyframes waddle {
+  from { transform: rotate(-2.4deg); }
+  to { transform: rotate(2.4deg); }
+}
 .plant-label {
   font-family: Georgia, serif;
   font-size: 12px;

@@ -25,7 +25,7 @@ There is no multiplayer server. There are no accounts. The social layer of this 
 
 ## Principles
 
-1. **One file, forever.** The shipped artifact is a single HTML file that works from `file://`, offline, with zero dependencies, run-time or build-time.
+1. **One file, forever.** The shipped artifact is a single HTML file that works from `file://`, offline, with zero dependencies, run-time or build-time. It must stay light enough to travel — through a plain email attachment (≤ 20 MB) and onto weak hardware — but within that, richness beats minimalism: a living world is worth its weight. (Zero dependencies is the unbreakable part, not the byte count.)
 2. **The merge is sacred.** Merging two worlds may never lose a plant, a name, or a chronicle entry. Merge must be deterministic: both copies merging each other produce the same world.
 3. **The chronicle never lies.** History is append-only. Every planting, naming, meeting, and merge is recorded and survives every merge.
 4. **Drift is a feature.** Copies are *supposed* to diverge. There is no "canonical" world, no conflict to resolve — only reunion.

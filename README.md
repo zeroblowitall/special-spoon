@@ -4,9 +4,13 @@
 
 Driftgarden is a game genre that hasn't existed before: **play by diaspora.** Your garden lives *inside the HTML file itself* — no server, no account, no internet, ever. Give copies to people you know. Each copy grows differently on each machine: different plants, different names, different histories. And when two copies find each other again, drag one onto the other and the worlds **merge** — every plant and every line of history from both survives, and the meeting gives birth to a **hybrid species neither world could have grown alone**.
 
-> 📥 **Play now:** download [`dist/driftgarden.html`](dist/driftgarden.html) (≈125 KB), open it in any browser. A world is born the moment you open it.
+> 📥 **Play now:** download [`dist/driftgarden.html`](dist/driftgarden.html) (≈137 KB), open it in any browser. A world is born the moment you open it. *(On a phone, open the saved file with Chrome or Firefox — the built-in HTML viewer can't run JavaScript. Better yet, use the hosted copy below.)*
 >
-> 👥 **Playing with a friend?** Read [The First Meeting](PLAYTEST.md) — a guide to growing two worlds apart on purpose, and then letting them meet.
+> 📱 **On a phone:** once GitHub Pages is enabled for this repo (Settings → Pages → deploy from `main`, folder `/docs`), the game lives at a plain URL — the same file, reachable anywhere, still offline-first after the first visit.
+>
+> 👥 **Playing with a friend?** Read [The First Meeting](PLAYTEST.md) — a guide to growing two worlds apart on purpose, and then letting them meet. Safety habit: *open files you made; merge files you receive.*
+>
+> 🔊 **Turn your sound on.** The world is synthesised live — wind, rain, thunder, the small voices of the kith, and, if you're lucky, a song in a storm. No audio files; the file sings for itself.
 
 ## How it works
 

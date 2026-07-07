@@ -44,5 +44,15 @@ fs.mkdirSync(DIST, { recursive: true });
 const out = path.join(DIST, 'driftgarden.html');
 fs.writeFileSync(out, html, 'utf8');
 
-const kb = (fs.statSync(out).size / 1024).toFixed(1);
-console.log(`Built dist/driftgarden.html (v${version}) — ${kb} KB`);
+// A hosted copy for phones: GitHub Pages serves docs/ — the same file,
+// just reachable by URL. A world born there lives in the visitor's browser.
+const DOCS = path.join(ROOT, 'docs');
+fs.mkdirSync(DOCS, { recursive: true });
+fs.writeFileSync(path.join(DOCS, 'index.html'), html, 'utf8');
+
+const bytes = fs.statSync(out).size;
+const kb = (bytes / 1024).toFixed(1);
+console.log(`Built dist/driftgarden.html + docs/index.html (v${version}) — ${kb} KB`);
+if (bytes > 20 * 1024 * 1024) {
+  fail('the file has grown past 20 MB — it can no longer travel by plain email (MISSION principle 1)');
+}

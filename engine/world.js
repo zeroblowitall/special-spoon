@@ -1172,6 +1172,8 @@
               loser.tx = Math.max(0.03, Math.min(0.97, loser.x + (loser.x - best.x) * 8 + (rng() - 0.5) * 0.1));
               loser.ty = Math.max(0.56, Math.min(0.97, loser.y + (loser.y - best.y) * 8 + (rng() - 0.5) * 0.05));
               loser.u = bumpClock(w);
+              loser.saying = '!';
+              loser.sayingUntil = now + 1600;
               if (rng() < 0.35) {
                 var strifeText = kithLabel(winner) + ' drove ' + kithLabel(loser) + ' from the ' +
                   best.species + '. ' + kithLabel(loser) + ' will remember.';
@@ -1660,7 +1662,10 @@
   /* ---------- importing ---------- */
 
   function extractWorld(text) {
-    text = String(text).trim();
+    text = String(text);
+    // sanity cap: no honest world is this heavy; a hostile one gets no parse
+    if (text.length > 24 * 1024 * 1024) return null;
+    text = text.trim();
     if (!text) return null;
     if (text[0] === '{') {
       try {

@@ -725,6 +725,12 @@ check('world extracted from bare JSON', (() => {
   return !!direct && direct.id === A.id;
 })());
 check('garbage rejected politely', W.extractWorld('<html>hello</html>') === null);
+check('a hostile giant is rejected before parsing', (() => {
+  const giant = ' '.repeat(25 * 1024 * 1024);
+  const started = Date.now();
+  const out = W.extractWorld(giant);
+  return out === null && Date.now() - started < 500;
+})());
 
 /* ---------- summary ---------- */
 

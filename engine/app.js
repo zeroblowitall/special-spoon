@@ -80,6 +80,8 @@
   var lastWxKind = null; // re-render when the weather turns
   var beacon = null;     // { x, y, until } — the player's soft call; never saved
   var chronicleShowAll = false; // long histories start folded
+  var lastSayings = {};         // per-kith last spoken line, for chirp timing
+  var songStep = 0;             // which note of the melody comes next
 
   /* ---------- rendering ---------- */
 
@@ -93,6 +95,156 @@
 
   function toScreen(x, y) {
     return { x: 40 + x * 920, y: 470 + (y - 0.55) / 0.4 * 480 };
+  }
+
+  /* ---------- sound: the world, heard ----------
+   * Everything is synthesised on the spot from oscillators and filtered
+   * noise — no audio files, no dependencies. Browsers only allow sound
+   * after a user gesture, so the world stays silent until first touch. */
+
+  var audio = {
+    ctx: null,
+    master: null,
+    windGain: null,
+    rainGain: null,
+    muted: false,
+    lastChirp: 0,
+    songTimer: null,
+    rumbleTimer: null
+  };
+  try { audio.muted = localStorage.getItem('driftgarden.muted') === '1'; } catch (e) { /* fine */ }
+
+  function initAudio() {
+    if (audio.muted) return;
+    if (audio.ctx) {
+      // autoplay policy may have parked the context; a real touch wakes it
+      if (audio.ctx.state === 'suspended') audio.ctx.resume();
+      return;
+    }
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    var ctx = new Ctx();
+    audio.ctx = ctx;
+    audio.master = ctx.createGain();
+    audio.master.gain.value = 0.6;
+    audio.master.connect(ctx.destination);
+
+    // one shared loop of white noise feeds both wind and rain
+    var seconds = 2;
+    var buffer = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
+    var data = buffer.getChannelData(0);
+    for (var i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+
+    var wind = ctx.createBufferSource();
+    wind.buffer = buffer; wind.loop = true;
+    var windFilter = ctx.createBiquadFilter();
+    windFilter.type = 'lowpass'; windFilter.frequency.value = 260; windFilter.Q.value = 0.6;
+    audio.windGain = ctx.createGain(); audio.windGain.gain.value = 0;
+    wind.connect(windFilter); windFilter.connect(audio.windGain); audio.windGain.connect(audio.master);
+    wind.start();
+
+    var rain = ctx.createBufferSource();
+    rain.buffer = buffer; rain.loop = true;
+    var rainFilter = ctx.createBiquadFilter();
+    rainFilter.type = 'bandpass'; rainFilter.frequency.value = 4200; rainFilter.Q.value = 0.4;
+    audio.rainGain = ctx.createGain(); audio.rainGain.gain.value = 0;
+    rain.connect(rainFilter); rainFilter.connect(audio.rainGain); audio.rainGain.connect(audio.master);
+    rain.start();
+
+    updateWeatherAudio(lastWxKind || 'clear');
+  }
+  window.addEventListener('pointerdown', initAudio);
+  window.addEventListener('keydown', initAudio);
+
+  var WX_SOUND = {
+    clear: { wind: 0.03, rain: 0 },
+    breeze: { wind: 0.09, rain: 0 },
+    mist: { wind: 0.045, rain: 0 },
+    rain: { wind: 0.05, rain: 0.05 },
+    storm: { wind: 0.16, rain: 0.09 }
+  };
+
+  function updateWeatherAudio(kind) {
+    if (!audio.ctx || audio.muted) return;
+    var target = WX_SOUND[kind] || WX_SOUND.clear;
+    var t = audio.ctx.currentTime;
+    audio.windGain.gain.linearRampToValueAtTime(target.wind, t + 2.5);
+    audio.rainGain.gain.linearRampToValueAtTime(target.rain, t + 2.5);
+    clearTimeout(audio.rumbleTimer);
+    if (kind === 'storm') scheduleRumble();
+  }
+
+  function scheduleRumble() {
+    audio.rumbleTimer = setTimeout(function () {
+      if (!audio.ctx || audio.muted || lastWxKind !== 'storm') return;
+      var ctx = audio.ctx;
+      var osc = ctx.createOscillator();
+      var g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(52 + Math.random() * 18, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(34, ctx.currentTime + 1.6);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.25);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 1.9);
+      osc.connect(g); g.connect(audio.master);
+      osc.start(); osc.stop(ctx.currentTime + 2);
+      scheduleRumble();
+    }, 7000 + Math.random() * 14000);
+  }
+
+  // a kith speaks: two tiny blips in its own register
+  function chirp(voiceSeed) {
+    if (!audio.ctx || audio.muted) return;
+    var now = Date.now();
+    if (now - audio.lastChirp < 450) return;
+    audio.lastChirp = now;
+    var ctx = audio.ctx;
+    var base = 300 + (voiceSeed % 420);
+    [0, 0.11].forEach(function (delay, i) {
+      var osc = ctx.createOscillator();
+      var g = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = base * (i === 0 ? 1 : 1.26);
+      var t0 = ctx.currentTime + delay;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.055, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+      osc.connect(g); g.connect(audio.master);
+      osc.start(t0); osc.stop(t0 + 0.1);
+    });
+  }
+
+  // the singer's melody: slow pentatonic notes drawn from its genome
+  var PENTATONIC = [0, 2, 4, 7, 9, 12];
+  function songNote(voiceSeed, step) {
+    if (!audio.ctx || audio.muted) return;
+    var ctx = audio.ctx;
+    var base = 220 * Math.pow(2, ((voiceSeed % 5) - 2) / 12);
+    var semitone = PENTATONIC[(voiceSeed + step * 3) % PENTATONIC.length];
+    var osc = ctx.createOscillator();
+    var g = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = base * Math.pow(2, semitone / 12);
+    var t0 = ctx.currentTime;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.05, t0 + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.4);
+    osc.connect(g); g.connect(audio.master);
+    osc.start(t0); osc.stop(t0 + 1.5);
+  }
+
+  function toggleMute() {
+    audio.muted = !audio.muted;
+    try { localStorage.setItem('driftgarden.muted', audio.muted ? '1' : '0'); } catch (e) { /* fine */ }
+    if (audio.muted && audio.ctx) {
+      audio.ctx.suspend();
+    } else if (audio.ctx) {
+      audio.ctx.resume();
+      updateWeatherAudio(lastWxKind || 'clear');
+    } else {
+      initAudio();
+    }
+    render();
   }
 
   /* ---------- the land, painted ---------- */
@@ -184,7 +336,8 @@
 
     // weather, painted over everything
     var wx = W.weatherAt(state.id, Date.now());
-    lastWxKind = wx.kind;
+    if (wx.kind !== lastWxKind) { lastWxKind = wx.kind; updateWeatherAudio(wx.kind); }
+    else lastWxKind = wx.kind;
     if (wx.kind === 'rain' || wx.kind === 'storm') {
       var drops = [];
       var rainRng = W.mulberry32(W.hash32(state.id + ':raindrops'));
@@ -364,16 +517,20 @@
     var label = k.name || (emissary ? k.given : '');
     var labelSvg = label ? '<text class="plant-label" x="0" y="14">' + escapeHtml(label) + '</text>' : '';
     var saying = (k.saying && k.sayingUntil && now < k.sayingUntil) ? escapeHtml(k.saying) : '';
-    var speechSvg = '<text class="kith-speech" x="0" y="' + (-26 * scale).toFixed(0) + '">' + saying + '</text>';
+    // stagger bubbles by identity so close talkers don't overlap
+    var speechLift = 26 * scale + (W.hash32(k.id) % 3) * 9;
+    var speechShift = ((W.hash32(k.id + 'x') % 3) - 1) * 8;
+    var speechSvg = '<text class="kith-speech" x="' + speechShift + '" y="' + (-speechLift).toFixed(0) + '">' + saying + '</text>';
     var haloSel = sel ? '<circle cx="0" cy="-6" r="16" fill="none" stroke="#ffd166" stroke-width="2" opacity="0.9"/>' : '';
     var haloEmissary = emissary ? '<circle cx="0" cy="-6" r="13" fill="none" stroke="#ffd166" stroke-width="1" stroke-dasharray="2 3" opacity="0.85" class="emissary-ring"/>' : '';
 
-    return '<g class="kith-group' + (sel ? ' selected' : '') + '" data-kith="' + k.id + '" ' +
+    return '<g class="kith-group' + (sel ? ' selected' : '') + ' act-' + k.act + '" data-kith="' + k.id + '" ' +
       'style="transition: transform ' + (KITH_TICK_MS / 1000 + 0.2) + 's linear" ' +
       'transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')">' +
       '<ellipse cx="0" cy="1" rx="9" ry="3" fill="rgba(0,0,0,0.25)"/>' +
       haloEmissary + haloSel +
       '<g class="kith-bob" style="animation-delay:-' + (W.hash32(k.id) % 3000) + 'ms">' +
+      '<g class="pose">' +
       '<g transform="scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
       ears +
       '<ellipse cx="0" cy="-7" rx="8.5" ry="9" fill="' + body + '"/>' +
@@ -381,7 +538,7 @@
       eyes + act +
       '<ellipse cx="-3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>' +
       '<ellipse cx="3.5" cy="1" rx="2.2" ry="1.6" fill="' + body + '"/>' +
-      '</g></g>' + labelSvg + speechSvg + '</g>';
+      '</g></g></g>' + labelSvg + speechSvg + '</g>';
   }
 
   // Between full renders, glide the kith to their new positions cheaply.
@@ -395,9 +552,20 @@
       var node = layer.querySelector('[data-kith="' + k.id + '"]');
       if (!node) { missing = true; return; }
       var pos = toScreen(k.x, k.y);
-      node.setAttribute('transform', 'translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')');
+      var prev = node.getAttribute('transform');
+      var next = 'translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')';
+      node.setAttribute('transform', next);
+      node.classList.toggle('moving', prev !== next);
+      node.classList.toggle('act-rest', k.act === 'rest');
+      node.classList.toggle('act-shelter', k.act === 'shelter');
+      node.classList.toggle('act-eat', k.act === 'eat');
       var speech = node.querySelector('.kith-speech');
-      if (speech) speech.textContent = (k.saying && k.sayingUntil && now < k.sayingUntil) ? k.saying : '';
+      if (speech) {
+        var line = (k.saying && k.sayingUntil && now < k.sayingUntil) ? k.saying : '';
+        if (line && line !== lastSayings[k.id]) chirp(W.hash32(k.id + line));
+        lastSayings[k.id] = line;
+        speech.textContent = line;
+      }
     });
     if (missing || layer.querySelectorAll('.kith-group').length !== living.length) {
       render(); // someone was born, or someone left us — rebuild properly
@@ -422,6 +590,7 @@
       '<button class="btn" data-act="lexicon">Lexicon</button>' +
       '<button class="btn" data-act="preserve">Preserve</button>' +
       '<button class="btn" data-act="worlds" title="Your worlds">⌂</button>' +
+      '<button class="btn" data-act="mute" title="' + (audio.muted ? 'Sound is off' : 'Sound is on') + '">' + (audio.muted ? '🔇' : '🔊') + '</button>' +
       '<button class="btn" data-act="about">?</button>' +
       '</div></div>';
   }
@@ -655,6 +824,7 @@
         '<p><strong>Bless an emissary.</strong> Choose one kith as yours. When worlds merge, your emissary leads the meeting — and the child born of a first meeting is your emissary’s child.</p>' +
         '<p><strong>Set it free.</strong> Press <em>Preserve</em> and the game writes itself into a new file with your world inside. Give copies to people. Their copies will drift.</p>' +
         '<p><strong>Reunite it.</strong> When two copies meet again, merge them. Nothing is ever lost, and every first meeting creates new life.</p>' +
+        '<p><strong>A safety habit worth keeping:</strong> open files <em>you</em> made; <em>merge</em> files you receive. Merging only reads a world\'s data — it can never run anything. Opening someone else\'s copy of the game runs their code, like opening any file from a stranger.</p>' +
         '<p class="muted">Your world stays on your device. Nothing is ever sent anywhere. Free to copy and share — that is the point. And remember: a browser can lose its memory; a file cannot. <strong>Preserve often.</strong> Source: github.com/zeroblowitall/special-spoon</p>' +
         '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
     }
@@ -821,6 +991,8 @@
           openModal = act; render();
         } else if (act === 'chronicle-all') {
           chronicleShowAll = true; render();
+        } else if (act === 'mute') {
+          toggleMute();
         } else if (act === 'close-modal') {
           openModal = null; render();
         } else if (act === 'new-world') {
@@ -958,6 +1130,14 @@
       announceNews(events);
     }
     if (!openModal) updateKithLayer();
+    // a sheltering singer sings, note by note
+    if (lastWxKind === 'storm') {
+      var singer = W.livingKith(state).filter(function (k) {
+        return k.act === 'shelter' && W.knowsOf(k).indexOf('song') > -1;
+      })[0];
+      if (singer && songStep % 2 === 0) songNote(W.hash32(singer.id), songStep / 2);
+      songStep++;
+    }
   }, KITH_TICK_MS);
 
   // The world endures: growth advances, skies turn, twice a minute.
@@ -965,6 +1145,7 @@
     W.advanceGrowth(state);
     var wx = W.weatherTick(state); // chronicles storms exactly once
     save();
+    if (wx.kind !== lastWxKind) updateWeatherAudio(wx.kind);
     if (!openModal && (wx.kind !== lastWxKind || !selected)) render();
   }, 30000);
 
