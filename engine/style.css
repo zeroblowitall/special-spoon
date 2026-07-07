@@ -188,6 +188,24 @@ html, body {
 .chronicle-entry.kind-merge .what { color: var(--accent); }
 .chronicle-entry.kind-born .what { color: var(--good); }
 
+/* Beckon */
+.beckon-ripple {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  animation: beckonripple 2.4s ease-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.beckon-ripple.r2 { animation-delay: -1.2s; }
+@keyframes beckonripple {
+  from { transform: scale(0.4); opacity: 0.9; }
+  to { transform: scale(3.2); opacity: 0; }
+}
+
+/* Families */
+.family-node { font-size: 0.88rem; padding: 0.08rem 0; }
+
 /* Speech */
 .kith-speech {
   font-family: Georgia, serif;

@@ -76,8 +76,9 @@
   /* ---------- ephemeral UI state ---------- */
 
   var selected = null;   // { type: 'plant'|'kith', id: '...' } | null
-  var openModal = null;  // 'merge' | 'chronicle' | 'about' | 'worlds' | null
+  var openModal = null;  // 'merge' | 'chronicle' | 'about' | 'worlds' | 'lexicon' | 'families' | null
   var lastWxKind = null; // re-render when the weather turns
+  var beacon = null;     // { x, y, until } — the player's soft call; never saved
 
   /* ---------- rendering ---------- */
 
@@ -173,6 +174,11 @@
     }
 
     plants.forEach(function (p) { svgParts.push(drawPlant(p)); });
+    if (beacon && Date.now() < beacon.until) {
+      var bpos = toScreen(beacon.x, beacon.y);
+      svgParts.push('<g class="beckon" transform="translate(' + bpos.x.toFixed(1) + ' ' + bpos.y.toFixed(1) + ')">' +
+        '<circle class="beckon-ripple" r="6"/><circle class="beckon-ripple r2" r="6"/></g>');
+    }
     svgParts.push('<g id="kith-layer">' + drawAllKith() + '</g>');
 
     // weather, painted over everything
@@ -559,7 +565,27 @@
         : '';
       inner = '<h2>The Chronicle</h2>' + lineage +
         '<div>' + entries + '</div>' +
-        '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
+        '<div class="row"><button class="btn" data-act="families">Families…</button>' +
+        '<button class="btn" data-act="close-modal">Close</button></div>';
+    } else if (openModal === 'families') {
+      var fam = W.familiesOf(state);
+      function branch(kithId, depth) {
+        var k = state.kith[kithId];
+        if (!k || depth > 6) return '';
+        var status = k.passed ? ' <span class="muted">(remembered)</span>' :
+          (state.emissary === k.id ? ' <span class="badge-now">emissary</span>' : '');
+        var kids = (fam.childrenOf[kithId] || []).map(function (cid) { return branch(cid, depth + 1); }).join('');
+        return '<div class="family-node" style="margin-left:' + (depth * 1.1) + 'rem">' +
+          (depth > 0 ? '└ ' : '') + escapeHtml(W.kithLabel(k)) + status + '</div>' + kids;
+      }
+      var trees = fam.roots.map(function (root) {
+        return '<div class="card-sub" style="margin:0.7rem 0 0.2rem">the line of ' + escapeHtml(W.kithLabel(root)) + '</div>' + branch(root.id, 0);
+      }).join('');
+      inner = '<h2>Families</h2>' +
+        '<p class="muted">The bloodlines of this world, root to leaf. Children of two worlds appear in the line of each parent.</p>' +
+        (trees || '<p class="muted">No families yet — children come to bonded, grown kith in fair weather. Give it time.</p>') +
+        '<div class="row"><button class="btn" data-act="chronicle">← Chronicle</button>' +
+        '<button class="btn" data-act="close-modal">Close</button></div>';
     } else if (openModal === 'lexicon') {
       var tongue = W.worldLexicon(state);
       var concepts = Object.keys(tongue).sort(function (a, b) {
@@ -778,7 +804,7 @@
           preserveWorld();
           render();
           toast('World preserved. The file you just downloaded IS your world — share copies freely.');
-        } else if (act === 'merge' || act === 'chronicle' || act === 'about' || act === 'worlds' || act === 'lexicon') {
+        } else if (act === 'merge' || act === 'chronicle' || act === 'about' || act === 'worlds' || act === 'lexicon' || act === 'families') {
           openModal = act; render();
         } else if (act === 'close-modal') {
           openModal = null; render();
@@ -848,6 +874,25 @@
       });
     });
 
+    // a click on bare land is a soft call — the curious will come
+    var worldSvg = document.getElementById('world');
+    if (worldSvg) worldSvg.addEventListener('click', function (event) {
+      if (event.target.closest && (event.target.closest('.plant-group') || event.target.closest('.kith-group'))) return;
+      var pt = worldSvg.createSVGPoint();
+      pt.x = event.clientX; pt.y = event.clientY;
+      var ctm = worldSvg.getScreenCTM();
+      if (!ctm) return;
+      var p = pt.matrixTransform(ctm.inverse());
+      var wx = (p.x - 40) / 920;
+      var wy = 0.55 + (p.y - 470) / 1200;
+      if (wx < 0.02 || wx > 0.98 || wy < 0.555 || wy > 0.99) return; // the sky does not listen
+      if (!W.isLandAt(W.makeTerrain(state.id), wx, wy)) { toast('Only ripples answer from the water.'); return; }
+      beacon = { x: wx, y: wy, until: Date.now() + 45000 };
+      selected = null;
+      render();
+      toast('You call softly. The curious will come.');
+    });
+
     var worldName = document.getElementById('world-name');
     if (worldName) worldName.addEventListener('click', function () {
       var name = prompt('Rename this world:', state.name);
@@ -891,7 +936,8 @@
 
   // The kith live: think & move every couple of seconds, glide between beats.
   setInterval(function () {
-    var events = W.kithTick(state, KITH_TICK_MS / 1000);
+    var events = W.kithTick(state, KITH_TICK_MS / 1000, beacon);
+    if (beacon && Date.now() > beacon.until) beacon = null;
     if (events && events.length > 0) {
       save();
       announceNews(events);

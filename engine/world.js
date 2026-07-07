@@ -39,8 +39,10 @@
   var WATER_COOLDOWN = 60 * 60 * 1000;
   var KITH_CAP = 20;
   var FOUNDER_COUNT = 3;
-  var ENERGY_DECAY_PER_SEC = 1 / 300;   // peckish after ~2.5 min of watching
+  var ENERGY_DECAY_PER_SEC = 1 / 4800;  // world-speed: hungry roughly hourly
   var EAT_SECONDS = 5;
+  var GRAZE_COST = 0.12;                // a sip visibly tires the bloom…
+  var GRAZE_FLOOR = 0.3;                // …but never kills the plant
   var KITH_STAGES = [                    // age thresholds in real days
     { name: 'young', until: 1 },
     { name: 'grown', until: 7 },
@@ -441,6 +443,23 @@
     chronicle(w, 'plant', kithLabel(k) + ' planted a ' + species + ' seed in the ' +
       BIOMES[biomeAt(terrain, spot.x, spot.y)].name + '. The garden grows itself now.', 'gp' + plantId);
     return plant;
+  }
+
+  /* Family lines, derived from parenthood: the roots are kith with no
+   * recorded parents who founded a line; the branches are everyone since. */
+  function familiesOf(w) {
+    var all = Object.keys(w.kith || {}).map(function (id) { return w.kith[id]; });
+    var childrenOf = {};
+    all.forEach(function (k) {
+      (k.parents || []).forEach(function (pid) {
+        (childrenOf[pid] = childrenOf[pid] || []).push(k.id);
+      });
+    });
+    Object.keys(childrenOf).forEach(function (pid) { childrenOf[pid].sort(); });
+    var roots = all.filter(function (k) {
+      return (!k.parents || k.parents.length === 0) && childrenOf[k.id];
+    }).sort(function (a, b) { return a.born - b.born || (a.id < b.id ? -1 : 1); });
+    return { roots: roots, childrenOf: childrenOf };
   }
 
   var WHISPER_COOLDOWN = 20 * 3600 * 1000;
@@ -970,12 +989,13 @@
    * Movement, hunger, moods and slow trust-drift are ephemeral flavour and
    * do NOT bump the logical clock; only milestones (bonds, births, deaths,
    * memories' first formation) are clocked content. */
-  function kithTick(w, dt) {
+  function kithTick(w, dt, beacon) {
     var now = env.now();
     var events = checkMortality(w, now);
     var terrain = makeTerrain(w.id);
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
     var storm = weatherAt(w.id, now).kind === 'storm';
+    var call = (beacon && now < beacon.until) ? beacon : null;
     var alive = livingKith(w);
     var blooming = Object.keys(w.plants).map(function (id) { return w.plants[id]; })
       .filter(function (p) { return p.growth > 0.55; });
@@ -992,7 +1012,10 @@
           var meal = 0.5;
           if (plant) {
             var liking = inbornLiking(k.id, plant.species);
-            meal = 0.45 + liking * 0.3;
+            meal = 0.55 + liking * 0.3;
+            // grazing tires the bloom: it regrows over hours, so food comes
+            // in cycles and a small garden cannot feed a large tribe
+            plant.growth = Math.max(GRAZE_FLOOR, plant.growth - GRAZE_COST);
             attendConcept(w, k, 'plant:' + plant.species); // a thing eaten is a thing named
             var learned = (k.taste[plant.species] === undefined);
             k.taste[plant.species] = liking; // it now KNOWS how this tastes
@@ -1123,17 +1146,23 @@
           k.tx = friend.x; k.ty = friend.y;
         }
       } else if (k.tx === null || (Math.abs(k.tx - k.x) < 0.01 && Math.abs(k.ty - k.y) < 0.01)) {
-        if (rng() < brain.patience * 0.6) {
+        // a soft call on the wind — the curious answer it
+        if (call && rng() < 0.25 + brain.curiosity * 0.55) {
+          var bx = Math.max(0.03, Math.min(0.97, call.x + (rng() - 0.5) * 0.06));
+          var by = Math.max(0.56, Math.min(0.97, call.y + (rng() - 0.5) * 0.04));
+          if (isLandAt(terrain, bx, by)) { k.tx = bx; k.ty = by; }
+        } else if (rng() < brain.patience * 0.6) {
           k.act = 'rest';
           k.actUntil = now + (4 + rng() * 12) * 1000;
           return;
-        }
-        // pick somewhere new to be — on land; range set by wanderlust
-        for (var tries = 0; tries < 8; tries++) {
-          var range = 0.1 + k.brain.wanderlust * 0.5;
-          var cx = Math.max(0.03, Math.min(0.97, k.x + (rng() - 0.5) * range * 2));
-          var cy = Math.max(0.56, Math.min(0.97, k.y + (rng() - 0.5) * range));
-          if (isLandAt(terrain, cx, cy)) { k.tx = cx; k.ty = cy; break; }
+        } else {
+          // pick somewhere new to be — on land; range set by wanderlust
+          for (var tries = 0; tries < 8; tries++) {
+            var range = 0.1 + k.brain.wanderlust * 0.5;
+            var cx = Math.max(0.03, Math.min(0.97, k.x + (rng() - 0.5) * range * 2));
+            var cy = Math.max(0.56, Math.min(0.97, k.y + (rng() - 0.5) * range));
+            if (isLandAt(terrain, cx, cy)) { k.tx = cx; k.ty = cy; break; }
+          }
         }
       }
 
@@ -1624,6 +1653,7 @@
     knowsOf: knowsOf,
     learn: learn,
     keeperPlant: keeperPlant,
+    familiesOf: familiesOf,
     plantLabel: plantLabel,
     mergeWorlds: mergeWorlds,
     WATER_COOLDOWN: WATER_COOLDOWN,

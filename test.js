@@ -581,7 +581,66 @@ W.mergeWorlds(gardenMerged, clone(gardenTwinB));
 check('reunited copies hold one garden plant, not two',
   Object.keys(gardenMerged.plants).filter(id => id === plantedA.id).length === 1);
 
-/* ---------- 17. extractWorld round-trip ---------- */
+/* ---------- 17. the ecology: grazing ---------- */
+
+console.log('grazing');
+let grazeWorld = W.newWorld();
+while (W.weatherAt(grazeWorld.id, fakeNow).kind === 'storm') grazeWorld = W.newWorld();
+const pasture = Object.values(grazeWorld.plants)[0];
+pasture.growth = 1;
+Object.values(grazeWorld.plants).forEach(p => { if (p.id !== pasture.id) p.growth = 0; });
+const grazer = Object.values(grazeWorld.kith)[0];
+Object.values(grazeWorld.kith).forEach(k => { k.energy = 0.9; }); // no rivals
+grazer.energy = 0.1;
+grazer.x = pasture.x; grazer.y = pasture.y; grazer.tx = null; grazer.ty = null;
+for (let t = 0; t < 10 && pasture.growth === 1; t++) {
+  W.kithTick(grazeWorld, 2);
+  fakeNow += 2000;
+}
+for (let t = 0; t < 10 && grazeWorld.kith[grazer.id].act === 'eat'; t++) {
+  W.kithTick(grazeWorld, 2);
+  fakeNow += 2000;
+}
+check('a sip visibly tires the bloom', pasture.growth < 1);
+check('but never kills the plant', pasture.growth >= 0.3);
+check('and the grazer is fed', grazeWorld.kith[grazer.id].energy > 0.5);
+
+/* ---------- 18. a week alone ---------- */
+
+console.log('a week alone');
+const weekWorld = W.newWorld();
+for (let i = 0; i < 4; i++) W.plantSeed(weekWorld);
+const weekFolk = Object.values(weekWorld.kith);
+weekFolk[0].trust[weekFolk[1].id] = 0.6; // an early friendship
+weekFolk[1].trust[weekFolk[0].id] = 0.6;
+weekWorld.touched = fakeNow;
+const weekChronicleStart = weekWorld.chronicle.length;
+for (let day = 0; day < 7; day++) {
+  hoursPass(22); // the file sleeps most of each day
+  W.catchUp(weekWorld);
+  // a brief daily visit: the world runs live for ~2 minutes
+  for (let t = 0; t < 60; t++) {
+    W.kithTick(weekWorld, 2);
+    fakeNow += 2000;
+  }
+  weekWorld.touched = fakeNow;
+  hoursPass(2 - 60 * 2 / 3600);
+}
+check('the world is alive after a week of near-neglect', W.livingKith(weekWorld).length >= 2,
+  W.livingKith(weekWorld).length + ' alive');
+check('nobody is starving with wild plants about', W.livingKith(weekWorld).every(k => !k.starving));
+check('life happened while we were away', weekWorld.chronicle.length > weekChronicleStart,
+  (weekWorld.chronicle.length - weekChronicleStart) + ' new entries');
+
+/* ---------- 19. families ---------- */
+
+console.log('families');
+const familyTree = W.familiesOf(reunitedNursery); // holds the child from the birth test
+check('parents found as roots', familyTree.roots.length >= 2);
+check('the child hangs from its parent', familyTree.childrenOf[pa.id] && familyTree.childrenOf[pa.id].length === 1);
+check('childless bystanders are not family roots', familyTree.roots.every(r => familyTree.childrenOf[r.id]));
+
+/* ---------- 20. extractWorld round-trip ---------- */
 
 console.log('extraction');
 const json = JSON.stringify(A).replace(/</g, '\\u003c');
