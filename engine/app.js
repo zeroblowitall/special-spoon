@@ -477,6 +477,26 @@
     var bondLine = bonds.length
       ? 'fond of ' + bonds.slice(0, 3).map(function (id) { return escapeHtml(W.kithLabel(state.kith[id])); }).join(', ') + (bonds.length > 3 ? '…' : '')
       : null;
+    var grudges = Object.keys(k.trust || {}).filter(function (id) { return k.trust[id] < -0.15 && state.kith[id] && !state.kith[id].passed; });
+    if (grudges.length) {
+      bondLine = (bondLine ? bondLine + ' · ' : '') + 'bears a grudge against ' +
+        escapeHtml(W.kithLabel(state.kith[grudges[0]])) + (grudges.length > 1 ? ' and others' : '');
+    }
+    var tribe = W.tribeOfKith(state, k.id);
+    var tribeLine = tribe ? 'of the ' + escapeHtml(tribe.name) + ' (' + tribe.members.length + ' strong)' : null;
+    var kin = [];
+    (k.parents || []).forEach(function (pid) {
+      if (state.kith[pid]) kin.push('child of ' + escapeHtml(W.kithLabel(state.kith[pid])) + (state.kith[pid].passed ? ' (remembered)' : ''));
+    });
+    var children = Object.keys(state.kith).filter(function (id) {
+      var c = state.kith[id];
+      return c.parents && c.parents.indexOf(k.id) > -1;
+    });
+    if (children.length) {
+      kin.push('parent of ' + children.slice(0, 3).map(function (id) { return escapeHtml(W.kithLabel(state.kith[id])); }).join(', ') + (children.length > 3 ? '…' : ''));
+    }
+    var kinLine = kin.length ? kin.join(' · ') : null;
+    var skillLine = W.knowsOf(k).indexOf('seedkeeping') > -1 ? 'a seed-keeper: it gardens' : null;
     var tastes = Object.keys(k.taste || {});
     var tasteLine = null;
     if (tastes.length) {
@@ -498,8 +518,11 @@
       '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
       '<div class="species">a ' + stage + ' kith' + (k.name ? ' · called ' + escapeHtml(k.given) + ' by its kin' : '') + '</div>' +
       '<div class="meta">' + ageText + ' · ' + mood + ' · on the ' + standing + '</div>' +
+      (tribeLine ? '<div class="meta">' + tribeLine + '</div>' : '') +
+      (kinLine ? '<div class="meta">' + kinLine + '</div>' : '') +
       (bondLine ? '<div class="meta">' + bondLine + '</div>' : '') +
       (tasteLine ? '<div class="meta">' + tasteLine + '</div>' : '') +
+      (skillLine ? '<div class="meta">' + skillLine + '</div>' : '') +
       mergeNote + emissaryNote +
       '<div class="row">' +
       '<button class="btn" data-act="name-kith">Name…</button>' +

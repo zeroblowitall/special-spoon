@@ -335,6 +335,114 @@
     return out;
   }
 
+  /* ---------- society ----------
+   * Tribes are DERIVED, never stored: connected clusters of mutual bonds
+   * among the living, so they merge safely by construction and reshape
+   * themselves as friendships (and grudges) shift. A tribe is named in its
+   * members' own tongue — their word for home. */
+
+  function tribesOf(w) {
+    var alive = livingKith(w);
+    var index = {};
+    alive.forEach(function (k, i) { index[k.id] = i; });
+    var parent = alive.map(function (_, i) { return i; });
+    function find(i) { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; }
+    alive.forEach(function (a) {
+      alive.forEach(function (b) {
+        if (a.id >= b.id) return;
+        if ((a.trust[b.id] || 0) >= 0.5 && (b.trust[a.id] || 0) >= 0.5) {
+          parent[find(index[a.id])] = find(index[b.id]);
+        }
+      });
+    });
+    var groups = {};
+    alive.forEach(function (k, i) {
+      var root = find(i);
+      (groups[root] = groups[root] || []).push(k);
+    });
+    return Object.keys(groups).map(function (root) { return groups[root]; })
+      .filter(function (members) { return members.length >= 3; })
+      .map(function (members) {
+        members.sort(function (a, b) { return a.id < b.id ? -1 : 1; });
+        // the tribe's name is its word for home — tallied from its members
+        var tally = {};
+        members.forEach(function (k) {
+          var entry = k.lex && k.lex.home;
+          var word = entry ? entry.word : coinWord(k, 'home');
+          tally[word] = (tally[word] || 0) + (entry ? entry.s : 0.1);
+        });
+        var words = Object.keys(tally).sort(function (a, b) { return tally[b] - tally[a] || (a < b ? -1 : 1); });
+        var name = words[0].charAt(0).toUpperCase() + words[0].slice(1);
+        return { name: name, members: members };
+      })
+      .sort(function (a, b) { return b.members.length - a.members.length; });
+  }
+
+  function tribeOfKith(w, kithId) {
+    var tribes = tribesOf(w);
+    for (var i = 0; i < tribes.length; i++) {
+      if (tribes[i].members.some(function (m) { return m.id === kithId; })) return tribes[i];
+    }
+    return null;
+  }
+
+  /* ---------- discoveries ----------
+   * Ideas are grown, not scripted: the right mind in the right circumstance
+   * discovers, and knowledge spreads only by teaching. Knowledge lives in
+   * the kith, so it travels and merges like language does. */
+
+  function knowsOf(k) { return k.knows || []; }
+
+  function learn(w, k, skill) {
+    if (knowsOf(k).indexOf(skill) > -1) return false;
+    k.knows = knowsOf(k).concat([skill]);
+    k.u = bumpClock(w);
+    return true;
+  }
+
+  var MAX_WILD_PLANTS = 40;
+
+  // A seed-keeper gardens: at most one deterministic planting per day, so
+  // drifted copies of the world grow the same gardener's garden.
+  function keeperPlant(w, k, dayBucket) {
+    var plantId = 'g' + hash32(k.id + ':garden:' + dayBucket).toString(16);
+    if (w.plants[plantId]) return null;
+    if (Object.keys(w.plants).length >= MAX_WILD_PLANTS) return null;
+    var favourites = Object.keys(k.taste || {}).filter(function (s) { return k.taste[s] > 0.3; })
+      .sort(function (a, b) { return k.taste[b] - k.taste[a] || (a < b ? -1 : 1); });
+    if (favourites.length === 0) return null;
+    var species = favourites[0];
+    // seeds come from a living plant of that species; extinct species are lost
+    var stock = null;
+    Object.keys(w.plants).sort().forEach(function (pid) {
+      if (!stock && w.plants[pid].species === species) stock = w.plants[pid];
+    });
+    if (!stock) return null;
+    var rng = mulberry32(hash32(plantId));
+    var terrain = makeTerrain(w.id);
+    var spot = isSoilAt(terrain, k.x, k.y) ? { x: k.x, y: k.y } : findSpot(w, 'garden:' + plantId, isSoilAt);
+    var genome = crossGenomes(rng, modernGenome(stock.genome), modernGenome(stock.genome), PLANT_GENE_SPEC);
+    var plant = {
+      id: plantId,
+      species: species,
+      name: null,
+      genome: genome,
+      x: spot.x, y: spot.y,
+      soil: BIOMES[biomeAt(terrain, spot.x, spot.y)].fertility,
+      planted: env.now(),
+      tick: env.now(),
+      growth: 0,
+      watered: 0,
+      origin: w.id,
+      bornOfMerge: null,
+      u: bumpClock(w)
+    };
+    w.plants[plantId] = plant;
+    chronicle(w, 'plant', kithLabel(k) + ' planted a ' + species + ' seed in the ' +
+      BIOMES[biomeAt(terrain, spot.x, spot.y)].name + '. The garden grows itself now.', 'gp' + plantId);
+    return plant;
+  }
+
   var WHISPER_COOLDOWN = 20 * 3600 * 1000;
 
   function whisperWord(w, concept, rawWord) {
@@ -888,6 +996,14 @@
             attendConcept(w, k, 'plant:' + plant.species); // a thing eaten is a thing named
             var learned = (k.taste[plant.species] === undefined);
             k.taste[plant.species] = liking; // it now KNOWS how this tastes
+            // eureka: a curious mind, a well-loved plant, a spark
+            if (liking > 0.45 && k.brain.curiosity > 0.7 &&
+                knowsOf(k).indexOf('seedkeeping') === -1 && rng() < 0.15) {
+              learn(w, k, 'seedkeeping');
+              var eurekaText = kithLabel(k) + ' began saving seeds of the plants it loves — the first of the kith to garden.';
+              chronicle(w, 'discovery', eurekaText, 'dk' + k.id);
+              events.push({ kind: 'discovery', text: eurekaText });
+            }
             if (learned) {
               // cap the memory; forget the blandest first, deterministically
               var species = Object.keys(k.taste);
@@ -949,6 +1065,38 @@
           var bd = Math.sqrt((best.x - k.x) * (best.x - k.x) + (best.y - k.y) * (best.y - k.y));
           k.tx = best.x; k.ty = best.y;
           if (bd < 0.035) {
+            // strife, not gore: two hungry strangers at one bloom is a contest
+            var rival = null;
+            alive.forEach(function (o) {
+              if (o.id === k.id || o.energy >= 0.5) return;
+              var mutual = Math.max(k.trust[o.id] || 0, o.trust[k.id] || 0);
+              if (mutual >= 0.5) return; // friends share
+              var od = Math.sqrt((o.x - best.x) * (o.x - best.x) + (o.y - best.y) * (o.y - best.y));
+              if (od < 0.03 && (!rival || od < rival.d)) rival = { o: o, d: od };
+            });
+            if (rival) {
+              var opponent = rival.o;
+              var kWins = k.brain.boldness !== opponent.brain.boldness
+                ? k.brain.boldness > opponent.brain.boldness
+                : k.id < opponent.id;
+              var winner = kWins ? k : opponent;
+              var loser = kWins ? opponent : k;
+              // the loser is driven off carrying a grudge
+              loser.trust[winner.id] = Math.max(-1, (loser.trust[winner.id] || 0) - 0.4);
+              loser.energy = Math.max(0, loser.energy - 0.05);
+              loser.act = 'wander';
+              loser.eating = null;
+              loser.tx = Math.max(0.03, Math.min(0.97, loser.x + (loser.x - best.x) * 8 + (rng() - 0.5) * 0.1));
+              loser.ty = Math.max(0.56, Math.min(0.97, loser.y + (loser.y - best.y) * 8 + (rng() - 0.5) * 0.05));
+              loser.u = bumpClock(w);
+              if (rng() < 0.35) {
+                var strifeText = kithLabel(winner) + ' drove ' + kithLabel(loser) + ' from the ' +
+                  best.species + '. ' + kithLabel(loser) + ' will remember.';
+                chronicle(w, 'strife', strifeText);
+                events.push({ kind: 'strife', text: strifeText });
+              }
+              if (!kWins) return; // we lost — flee, hungry still
+            }
             k.act = 'eat'; k.eating = best.id;
             k.actUntil = now + EAT_SECONDS * 1000;
             return;
@@ -1034,6 +1182,22 @@
             delete kk.trust[known[0]];
           }
         });
+        // teaching: knowledge spreads along friendship, to willing minds
+        if (ka.trust[kb.id] >= 0.5 && kb.trust[ka.id] >= 0.5 && rng() < 0.2) {
+          var pairKnows = [[ka, kb], [kb, ka]];
+          for (var ti = 0; ti < 2; ti++) {
+            var teacher = pairKnows[ti][0], pupil = pairKnows[ti][1];
+            var lesson = knowsOf(teacher).filter(function (s) { return knowsOf(pupil).indexOf(s) === -1; })[0];
+            if (lesson && pupil.brain.curiosity > 0.35) {
+              learn(w, pupil, lesson);
+              var taughtText = kithLabel(teacher) + ' taught ' + kithLabel(pupil) + ' the way of seed-keeping.';
+              chronicle(w, 'discovery', taughtText, 'dt' + pupil.id + lesson);
+              events.push({ kind: 'discovery', text: taughtText });
+              break;
+            }
+          }
+        }
+
         // chatter: what is nearby is what gets named
         if (rng() < 0.4) {
           var wx2 = weatherAt(w.id, now).kind;
@@ -1060,6 +1224,29 @@
         }
       }
     }
+
+    /* -- seed-keepers garden: one planting a day, identical in every copy -- */
+    alive.forEach(function (k) {
+      if (knowsOf(k).indexOf('seedkeeping') > -1 && k.energy > 0.5 && rng() < 0.06) {
+        keeperPlant(w, k, dayBucket);
+      }
+    });
+
+    /* -- three or more mutual bonds are the birth of a tribe, chronicled
+     * once per founding trio (the three senior members, stable as the
+     * tribe grows, identical in every copy) -- */
+    tribesOf(w).forEach(function (tribe) {
+      if (tribe.members.length < 3) return;
+      var founders = tribe.members.map(function (m) { return m.id; }).sort().slice(0, 3).join('');
+      var tribeId = 'tr' + hash32(founders).toString(16);
+      if (!w.chronicle.some(function (e) { return e.id === tribeId; })) {
+        var tribeText = 'A tribe has formed. They call themselves the ' + tribe.name + ': ' +
+          tribe.members.map(kithLabel).join(', ') + '.';
+        chronicle(w, 'kith', tribeText, tribeId);
+        events.push({ kind: 'tribe', text: tribeText });
+      }
+    });
+
     return events;
   }
 
@@ -1432,6 +1619,11 @@
     worldLexicon: worldLexicon,
     conceptLabel: conceptLabel,
     whisperWord: whisperWord,
+    tribesOf: tribesOf,
+    tribeOfKith: tribeOfKith,
+    knowsOf: knowsOf,
+    learn: learn,
+    keeperPlant: keeperPlant,
     plantLabel: plantLabel,
     mergeWorlds: mergeWorlds,
     WATER_COOLDOWN: WATER_COOLDOWN,

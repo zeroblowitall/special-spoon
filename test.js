@@ -507,7 +507,81 @@ if (dA[0].lex.home.word !== dB[0].lex.home.word) {
   check('identically on both sides', true);
 }
 
-/* ---------- 16. extractWorld round-trip ---------- */
+/* ---------- 16. society: tribes, strife, discovery ---------- */
+
+console.log('society');
+const societyWorld = W.newWorld();
+const folk = Object.values(societyWorld.kith);
+check('no tribes among strangers', W.tribesOf(societyWorld).length === 0);
+// three mutual bonds make a tribe
+folk[0].trust[folk[1].id] = 0.7; folk[1].trust[folk[0].id] = 0.7;
+folk[1].trust[folk[2].id] = 0.7; folk[2].trust[folk[1].id] = 0.7;
+const tribes = W.tribesOf(societyWorld);
+check('three mutual friends are a tribe', tribes.length === 1 && tribes[0].members.length === 3);
+check('the tribe is named in its own tongue', typeof tribes[0].name === 'string' && tribes[0].name.length >= 2 &&
+  tribes[0].name[0] === tribes[0].name[0].toUpperCase());
+check('tribeOfKith finds a member', W.tribeOfKith(societyWorld, folk[0].id) !== null);
+check('tribes are identical across copies', (() => {
+  const c1 = clone(societyWorld), c2 = clone(societyWorld);
+  return stable(W.tribesOf(c1).map(t => ({ n: t.name, m: t.members.map(m => m.id) }))) ===
+         stable(W.tribesOf(c2).map(t => ({ n: t.name, m: t.members.map(m => m.id) })));
+})());
+// tribe formation is chronicled exactly once
+W.kithTick(societyWorld, 2);
+W.kithTick(societyWorld, 2);
+const tribeEntries = societyWorld.chronicle.filter(e => e.text.indexOf('A tribe has formed') > -1);
+check('tribe formation chronicled exactly once', tribeEntries.length === 1);
+check('the chronicle names the tribe', tribeEntries[0].text.indexOf(tribes[0].name) > -1);
+
+// strife: two hungry strangers, one bloom
+let strifeWorld = W.newWorld();
+while (W.weatherAt(strifeWorld.id, fakeNow).kind === 'storm') strifeWorld = W.newWorld();
+const bloomIds = Object.keys(strifeWorld.plants);
+const arena = strifeWorld.plants[bloomIds[0]];
+arena.growth = 1; // in full bloom
+Object.values(strifeWorld.plants).forEach((p, i) => { if (p.id !== arena.id) p.growth = 0; });
+const rivals = Object.values(strifeWorld.kith);
+rivals.forEach((k, i) => {
+  k.x = arena.x + (i * 0.005); k.y = arena.y; k.tx = null; k.ty = null;
+  k.energy = 0.2; // hungry
+  k.born -= 3 * 24 * 3600 * 1000; // grown
+});
+let sawContest = false;
+for (let t = 0; t < 30 && !sawContest; t++) {
+  W.kithTick(strifeWorld, 2);
+  sawContest = Object.values(strifeWorld.kith).some(k =>
+    Object.keys(k.trust).some(id => k.trust[id] < 0));
+}
+check('a contest leaves a grudge (negative trust)', sawContest);
+check('grudges never fall below -1', Object.values(strifeWorld.kith).every(k =>
+  Object.keys(k.trust).every(id => k.trust[id] >= -1)));
+
+// discovery: learn + teach + garden
+const gardenWorld = W.newWorld();
+const keeper = Object.values(gardenWorld.kith)[0];
+const pupil = Object.values(gardenWorld.kith)[1];
+check('learning is once only', W.learn(gardenWorld, keeper, 'seedkeeping') === true &&
+  W.learn(gardenWorld, keeper, 'seedkeeping') === false);
+check('knowledge is content on the kith', W.knowsOf(keeper).indexOf('seedkeeping') > -1);
+// the keeper gardens: same day, same planting, in every copy
+keeper.taste['TestBloom'] = 0.8;
+gardenWorld.plants['stockplant0001'] = clone(Object.values(gardenWorld.plants)[0]);
+gardenWorld.plants['stockplant0001'].id = 'stockplant0001';
+gardenWorld.plants['stockplant0001'].species = 'TestBloom';
+const gardenDay = Math.floor(fakeNow / (24 * 3600 * 1000));
+const gardenTwinA = clone(gardenWorld), gardenTwinB = clone(gardenWorld);
+const plantedA = W.keeperPlant(gardenTwinA, gardenTwinA.kith[keeper.id], gardenDay);
+const plantedB = W.keeperPlant(gardenTwinB, gardenTwinB.kith[keeper.id], gardenDay);
+check('the keeper plants its favourite', !!plantedA && plantedA.species === 'TestBloom');
+check('the same planting in every copy', !!plantedA && !!plantedB && plantedA.id === plantedB.id &&
+  content(plantedA) === content(plantedB));
+check('one planting a day, no more', W.keeperPlant(gardenTwinA, gardenTwinA.kith[keeper.id], gardenDay) === null);
+const gardenMerged = clone(gardenTwinA);
+W.mergeWorlds(gardenMerged, clone(gardenTwinB));
+check('reunited copies hold one garden plant, not two',
+  Object.keys(gardenMerged.plants).filter(id => id === plantedA.id).length === 1);
+
+/* ---------- 17. extractWorld round-trip ---------- */
 
 console.log('extraction');
 const json = JSON.stringify(A).replace(/</g, '\\u003c');
