@@ -51,7 +51,8 @@
       } catch (e) { /* corrupted entry — start fresh */ }
       if (!state) state = W.newWorld();
     }
-    W.ensureKith(state);   // worlds preserved before the kith existed get theirs
+    W.ensureKith(state);        // worlds preserved before the kith existed get theirs
+    W.settleImmigrants(state);  // worlds preserved before the land existed settle onto it
     W.advanceGrowth(state);
     save();
   }
@@ -75,6 +76,55 @@
     return { x: 40 + x * 920, y: 470 + (y - 0.55) / 0.4 * 480 };
   }
 
+  /* ---------- the land, painted ---------- */
+
+  var BIOME_PAINT = {
+    deep: [35, 64, 94],
+    shallows: [46, 90, 117],
+    shore: [183, 162, 118],
+    meadow: [74, 107, 58],
+    rock: [109, 106, 99],
+    peak: [143, 141, 136]
+  };
+
+  var terrainImageCache = {};
+
+  function terrainDataURL(worldId) {
+    if (terrainImageCache[worldId]) return terrainImageCache[worldId];
+    var terrain = W.makeTerrain(worldId);
+    var canvas = document.createElement('canvas');
+    var CW = 480, CH = 256;
+    canvas.width = CW; canvas.height = CH;
+    var ctx = canvas.getContext('2d');
+    var img = ctx.createImageData(CW, CH);
+    // Screen consistency: image spans y 470..1000, i.e. world y 0.55..~0.99.
+    var ySpan = 530 / 1200;
+    for (var py = 0; py < CH; py++) {
+      var wy = 0.55 + (py / CH) * ySpan;
+      for (var px = 0; px < CW; px++) {
+        var wx = px / CW;
+        var biome = W.biomeAt(terrain, wx, wy);
+        var base = BIOME_PAINT[biome];
+        // gentle height shading + per-pixel grain
+        var h = 0;
+        var cell = terrain.heights[
+          Math.max(0, Math.min(terrain.rows - 1, Math.floor((wy - 0.55) / 0.45 * terrain.rows)))][
+          Math.max(0, Math.min(terrain.cols - 1, Math.floor(wx * terrain.cols)))];
+        h = (cell - 0.5) * 34;
+        var grain = ((W.hash32(worldId) ^ (px * 7919 + py * 104729)) % 13) - 6;
+        var i = (py * CW + px) * 4;
+        img.data[i] = Math.max(0, Math.min(255, base[0] + h + grain));
+        img.data[i + 1] = Math.max(0, Math.min(255, base[1] + h + grain));
+        img.data[i + 2] = Math.max(0, Math.min(255, base[2] + h + grain));
+        img.data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    var url = canvas.toDataURL('image/png');
+    terrainImageCache[worldId] = url;
+    return url;
+  }
+
   function skyColors() {
     var h = new Date().getHours();
     if (h >= 21 || h < 5) return ['#0b1026', '#1b2333', '#141d16'];
@@ -95,7 +145,8 @@
       '<linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">' +
       '<stop offset="0" stop-color="' + sky[2] + '"/><stop offset="1" stop-color="#131a12"/></linearGradient></defs>');
     svgParts.push('<rect x="0" y="0" width="1000" height="520" fill="url(#sky)"/>');
-    svgParts.push('<rect x="0" y="470" width="1000" height="530" fill="url(#ground)"/>');
+    svgParts.push('<image x="0" y="470" width="1000" height="530" preserveAspectRatio="none" href="' + terrainDataURL(state.id) + '"/>');
+    svgParts.push('<rect x="0" y="470" width="1000" height="530" fill="url(#ground)" opacity="0.35"/>');
     var hour = new Date().getHours();
     if (hour >= 21 || hour < 5) {
       svgParts.push('<circle cx="840" cy="110" r="34" fill="#f4f1de" opacity="0.9"/>' +
@@ -278,10 +329,13 @@
         escapeHtml(p.bornOfMerge.worlds[1]) + '</strong> — child of ' + escapeHtml(p.bornOfMerge.parents[0]) +
         ' and ' + escapeHtml(p.bornOfMerge.parents[1]) + '.</div>'
       : '';
+    var biome = W.biomeInfo(W.biomeAt(W.makeTerrain(state.id), p.x, p.y)).name;
+    var vigour = (p.soil || 1) > 1.05 ? 'thriving in rich soil' : (p.soil || 1) < 0.8 ? 'toughing out poor ground' : 'settled in fair soil';
     return '<div id="panel">' +
       '<h2>' + escapeHtml(p.name || 'Unnamed ' + p.species) + '</h2>' +
       '<div class="species">' + escapeHtml(p.species) + (p.origin === 'merge' ? ' · hybrid' : '') + '</div>' +
       '<div class="meta">' + ageText + ' · ' + stageText + ' · ' + Math.round(p.growth * 100) + '% grown</div>' +
+      '<div class="meta">rooted in the ' + biome + ', ' + vigour + '</div>' +
       hybridNote +
       '<div class="row">' +
       '<button class="btn" data-act="water" ' + (canWater ? '' : 'disabled title="Watered recently — try again in a while"') + '>Water</button>' +
@@ -306,10 +360,11 @@
     var emissaryNote = emissary
       ? '<div class="hybrid-note">✦ Your emissary. When worlds merge, ' + escapeHtml(W.kithLabel(k)) + ' will lead the meeting.</div>'
       : '';
+    var standing = W.biomeInfo(W.biomeAt(W.makeTerrain(state.id), k.x, k.y)).name;
     return '<div id="panel">' +
       '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
       '<div class="species">a ' + stage + ' kith' + (k.name ? ' · called ' + escapeHtml(k.given) + ' by its kin' : '') + '</div>' +
-      '<div class="meta">' + ageText + ' · ' + mood + '</div>' +
+      '<div class="meta">' + ageText + ' · ' + mood + ' · on the ' + standing + '</div>' +
       mergeNote + emissaryNote +
       '<div class="row">' +
       '<button class="btn" data-act="name-kith">Name…</button>' +

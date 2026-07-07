@@ -35,6 +35,20 @@ function stable(value) {
   return JSON.stringify(value);
 }
 
+// Positions are presentation, not content: every world settles travellers
+// onto its OWN land, so x/y legitimately differ between copies.
+const POSITION_KEYS = { x: 1, y: 1, tx: 1, ty: 1, facing: 1 };
+function content(value) {
+  const c = clone(value);
+  (function strip(node) {
+    if (Array.isArray(node)) { node.forEach(strip); return; }
+    if (node && typeof node === 'object') {
+      Object.keys(node).forEach(k => { if (POSITION_KEYS[k]) delete node[k]; else strip(node[k]); });
+    }
+  })(c);
+  return stable(c);
+}
+
 /* ---------- deterministic environment ---------- */
 
 let fakeNow = 1000000000000;
@@ -79,8 +93,8 @@ const resBA = W.mergeWorlds(BA, clone(A));
 W.advanceGrowth(AB);
 W.advanceGrowth(BA);
 
-check('plants identical', stable(AB.plants) === stable(BA.plants));
-check('kith identical', stable(AB.kith) === stable(BA.kith));
+check('plants identical', content(AB.plants) === content(BA.plants));
+check('kith identical', content(AB.kith) === content(BA.kith));
 check('chronicle identical', stable(AB.chronicle) === stable(BA.chronicle));
 check('clocks identical', AB.clock === BA.clock, AB.clock + ' vs ' + BA.clock);
 const lineageWithSelf = w => [{ id: w.id }].concat(w.lineage.map(l => ({ id: l.id })))
@@ -88,8 +102,8 @@ const lineageWithSelf = w => [{ id: w.id }].concat(w.lineage.map(l => ({ id: l.i
 check('lineage (incl. self) identical', lineageWithSelf(AB) === lineageWithSelf(BA));
 
 check('a child was born of the merge', !!resAB.child && !!resBA.child);
-check('the same child on both sides', resAB.child && resBA.child && stable(resAB.child) === stable(resBA.child));
-check('a plant hybrid grew on both sides', !!resAB.hybrid && stable(resAB.hybrid) === stable(resBA.hybrid));
+check('the same child on both sides', resAB.child && resBA.child && content(resAB.child) === content(resBA.child));
+check('a plant hybrid grew on both sides', !!resAB.hybrid && content(resAB.hybrid) === content(resBA.hybrid));
 check('child parents are the two emissaries',
   resAB.child && resAB.child.parents.sort().join(',') === [aEmissaryId, bEmissaryId].sort().join(','),
   resAB.child && resAB.child.parents.join(','));
@@ -194,7 +208,49 @@ check('same survivors on both sides', stable(Object.keys(bigAB.kith).sort()) ===
 check('both emissaries survived the crowding',
   bigAB.kith[bigA.emissary] && bigAB.kith[bigB.emissary] && bigBA.kith[bigA.emissary] && bigBA.kith[bigB.emissary]);
 
-/* ---------- 7. extractWorld round-trip ---------- */
+/* ---------- 7. the land ---------- */
+
+console.log('the land');
+const t1 = W.makeTerrain('terraintestworld');
+const t2 = W.makeTerrain('terraintestworld');
+const t3 = W.makeTerrain('adifferentworld1');
+check('terrain is deterministic per world', stable(t1.heights) === stable(t2.heights));
+check('different worlds get different land', stable(t1.heights) !== stable(t3.heights));
+
+const landWorld = W.newWorld();
+for (let i = 0; i < 8; i++) W.plantSeed(landWorld);
+const terrain = W.makeTerrain(landWorld.id);
+check('every plant took root in soil', Object.keys(landWorld.plants)
+  .every(id => W.isSoilAt(terrain, landWorld.plants[id].x, landWorld.plants[id].y)));
+check('every plant carries a soil vigour stamp', Object.keys(landWorld.plants)
+  .every(id => typeof landWorld.plants[id].soil === 'number' && landWorld.plants[id].soil > 0));
+check('every kith stands on land', Object.keys(landWorld.kith)
+  .every(id => W.isLandAt(terrain, landWorld.kith[id].x, landWorld.kith[id].y)));
+
+// travellers arriving in a lake settle onto the shore
+const host = W.newWorld();
+const visitor = W.newWorld();
+// strand every visitor entity in the host's deepest water spot
+let deepSpot = null;
+for (let r = 0; r < 22 && !deepSpot; r++) {
+  for (let c = 0; c < 48 && !deepSpot; c++) {
+    const x = (c + 0.5) / 48, y = 0.55 + (r + 0.5) / 22 * 0.45;
+    if (W.biomeAt(W.makeTerrain(host.id), x, y) === 'deep') deepSpot = { x, y };
+  }
+}
+if (deepSpot) {
+  Object.values(visitor.plants).forEach(p => { p.x = deepSpot.x; p.y = deepSpot.y; });
+  Object.values(visitor.kith).forEach(k => { k.x = deepSpot.x; k.y = deepSpot.y; });
+}
+W.plantSeed(visitor);
+W.mergeWorlds(host, clone(visitor));
+const hostTerrain = W.makeTerrain(host.id);
+check('no plant is left underwater after a merge', Object.keys(host.plants)
+  .every(id => W.isSoilAt(hostTerrain, host.plants[id].x, host.plants[id].y)));
+check('no kith is left underwater after a merge', Object.keys(host.kith)
+  .every(id => W.isLandAt(hostTerrain, host.kith[id].x, host.kith[id].y)));
+
+/* ---------- 8. extractWorld round-trip ---------- */
 
 console.log('extraction');
 const json = JSON.stringify(A).replace(/</g, '\\u003c');

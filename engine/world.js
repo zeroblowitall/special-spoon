@@ -161,6 +161,144 @@
     ears: [0, 2, true], voice: [0, 0] // arrays are spliced, bounds unused
   };
 
+  /* ---------- the land ----------
+   * Terrain is IDENTITY, not content: it is derived purely from the world's
+   * id, never stored, never merged. When worlds merge, travellers arrive
+   * onto the host world's own land and settle on it. */
+
+  var TERRAIN_COLS = 120;
+  var TERRAIN_ROWS = 56;
+  var terrainCache = {};
+
+  function valueNoise(rng, cols, rows) {
+    // coarse random lattice, sampled with smooth bilinear interpolation
+    var latticeW = 7, latticeH = 4;
+    var lattice = [];
+    for (var i = 0; i <= latticeH; i++) {
+      var row = [];
+      for (var j = 0; j <= latticeW; j++) row.push(rng());
+      lattice.push(row);
+    }
+    function smooth(t) { return t * t * (3 - 2 * t); }
+    var out = [];
+    for (var r = 0; r < rows; r++) {
+      var line = [];
+      for (var c = 0; c < cols; c++) {
+        var gx = (c / (cols - 1)) * latticeW;
+        var gy = (r / (rows - 1)) * latticeH;
+        var x0 = Math.min(latticeW - 1, Math.floor(gx));
+        var y0 = Math.min(latticeH - 1, Math.floor(gy));
+        var fx = smooth(gx - x0), fy = smooth(gy - y0);
+        var top = lattice[y0][x0] * (1 - fx) + lattice[y0][x0 + 1] * fx;
+        var bottom = lattice[y0 + 1][x0] * (1 - fx) + lattice[y0 + 1][x0 + 1] * fx;
+        line.push(top * (1 - fy) + bottom * fy);
+      }
+      out.push(line);
+    }
+    return out;
+  }
+
+  function makeTerrain(worldId) {
+    if (terrainCache[worldId]) return terrainCache[worldId];
+    var rng = mulberry32(hash32(worldId + ':terrain'));
+    var broad = valueNoise(rng, TERRAIN_COLS, TERRAIN_ROWS);
+    var detail = valueNoise(rng, TERRAIN_COLS, TERRAIN_ROWS);
+    var fine = valueNoise(rng, TERRAIN_COLS, TERRAIN_ROWS);
+    var heights = [];
+    var min = Infinity, max = -Infinity;
+    for (var r = 0; r < TERRAIN_ROWS; r++) {
+      var line = [];
+      for (var c = 0; c < TERRAIN_COLS; c++) {
+        var h = broad[r][c] * 0.6 + detail[r][c] * 0.28 + fine[r][c] * 0.12;
+        line.push(h);
+        if (h < min) min = h;
+        if (h > max) max = h;
+      }
+      heights.push(line);
+    }
+    for (var r2 = 0; r2 < TERRAIN_ROWS; r2++) {
+      for (var c2 = 0; c2 < TERRAIN_COLS; c2++) {
+        heights[r2][c2] = (heights[r2][c2] - min) / (max - min || 1);
+      }
+    }
+    var terrain = {
+      cols: TERRAIN_COLS,
+      rows: TERRAIN_ROWS,
+      heights: heights,
+      waterline: 0.24 + rng() * 0.16   // some worlds are lakelands, some dry
+    };
+    terrainCache[worldId] = terrain;
+    return terrain;
+  }
+
+  // World-space: x in [0,1], y in [0.55,1] (the ground region).
+  function terrainCell(terrain, x, y) {
+    var c = Math.max(0, Math.min(terrain.cols - 1, Math.floor(x * terrain.cols)));
+    var r = Math.max(0, Math.min(terrain.rows - 1, Math.floor((y - 0.55) / 0.45 * terrain.rows)));
+    return terrain.heights[r][c];
+  }
+
+  var BIOMES = {
+    deep: { name: 'deep water', land: false, soil: false, fertility: 0 },
+    shallows: { name: 'shallows', land: false, soil: false, fertility: 0 },
+    shore: { name: 'sandy shore', land: true, soil: true, fertility: 0.95 },
+    meadow: { name: 'meadow', land: true, soil: true, fertility: 1.2 },
+    rock: { name: 'rocky ground', land: true, soil: false, fertility: 0.6 },
+    peak: { name: 'stony peaks', land: true, soil: false, fertility: 0.4 }
+  };
+
+  function biomeAt(terrain, x, y) {
+    var h = terrainCell(terrain, x, y);
+    if (h < terrain.waterline - 0.08) return 'deep';
+    if (h < terrain.waterline) return 'shallows';
+    if (h < terrain.waterline + 0.07) return 'shore';
+    if (h < 0.66) return 'meadow';
+    if (h < 0.82) return 'rock';
+    return 'peak';
+  }
+
+  function isLandAt(terrain, x, y) { return BIOMES[biomeAt(terrain, x, y)].land; }
+  function isSoilAt(terrain, x, y) { return BIOMES[biomeAt(terrain, x, y)].soil; }
+
+  // Find a deterministic spot satisfying `test`, seeded by (world, key).
+  function findSpot(w, key, test) {
+    var terrain = makeTerrain(w.id);
+    var rng = mulberry32(hash32(w.id + ':spot:' + key));
+    for (var i = 0; i < 80; i++) {
+      var x = 0.04 + rng() * 0.92;
+      var y = 0.56 + rng() * 0.42;
+      if (test(terrain, x, y)) return { x: x, y: y };
+    }
+    // stubborn world (almost all water/rock): sweep for anything valid
+    for (var r = 0; r < terrain.rows; r++) {
+      for (var c = 0; c < terrain.cols; c++) {
+        var cx = (c + 0.5) / terrain.cols;
+        var cy = 0.55 + (r + 0.5) / terrain.rows * 0.45;
+        if (test(terrain, cx, cy)) return { x: cx, y: cy };
+      }
+    }
+    return { x: 0.5, y: 0.75 };
+  }
+
+  // Travellers from a merge settle onto the host world's own land.
+  function settleImmigrants(w) {
+    var terrain = makeTerrain(w.id);
+    Object.keys(w.plants).forEach(function (id) {
+      var p = w.plants[id];
+      if (!isSoilAt(terrain, p.x, p.y)) {
+        var spot = findSpot(w, 'plant:' + id, isSoilAt);
+        p.x = spot.x; p.y = spot.y;
+      }
+    });
+    Object.keys(w.kith || {}).forEach(function (id) {
+      var k = w.kith[id];
+      if (!isLandAt(terrain, k.x, k.y)) {
+        var spot = findSpot(w, 'kith:' + id, isLandAt);
+        k.x = spot.x; k.y = spot.y; k.tx = null; k.ty = null;
+      }
+    });
+  }
+
   /* ---------- world ---------- */
 
   function newWorld() {
@@ -200,13 +338,18 @@
   function plantSeed(w) {
     var rng = mulberry32(hash32(w.id + ':' + (w.clock + 1)));
     var id = env.newId();
+    var terrain = makeTerrain(w.id);
+    var spot = findSpot(w, 'seed:' + id, isSoilAt);
     var plant = {
       id: id,
       species: makeSpeciesName(rng),
       name: null,
       genome: newPlantGenome(rng),
-      x: 0.06 + rng() * 0.88,
-      y: 0.55 + rng() * 0.4,
+      x: spot.x,
+      y: spot.y,
+      // A plant carries the vigour of its native soil for life, wherever
+      // it later travels — so growth stays identical in every copy.
+      soil: BIOMES[biomeAt(terrain, spot.x, spot.y)].fertility,
       planted: env.now(),
       tick: env.now(),
       growth: 0,
@@ -216,7 +359,8 @@
       u: bumpClock(w)
     };
     w.plants[id] = plant;
-    chronicle(w, 'plant', 'A ' + plant.species + ' seed was planted.');
+    chronicle(w, 'plant', 'A ' + plant.species + ' seed was planted in the ' +
+      BIOMES[biomeAt(terrain, spot.x, spot.y)].name + '.');
     return plant;
   }
 
@@ -226,7 +370,7 @@
       var p = w.plants[id];
       if (p.growth >= 1) { p.tick = now; return; }
       var hours = Math.max(0, (now - (p.tick || p.planted)) / 3600000);
-      p.growth = Math.min(1, p.growth + (hours / GROW_HOURS) * p.genome.rate);
+      p.growth = Math.min(1, p.growth + (hours / GROW_HOURS) * p.genome.rate * (p.soil || 1));
       p.tick = now;
     });
   }
@@ -262,6 +406,7 @@
 
   function makeKith(w, rng, genome, parents, origin) {
     var id = env.newId();
+    var spot = findSpot(w, 'kith:' + id, isLandAt);
     var kith = {
       id: id,
       genome: genome,
@@ -272,8 +417,8 @@
       origin: origin || w.id,
       bornOfMerge: null,
       energy: 0.7 + rng() * 0.3,
-      x: 0.15 + rng() * 0.7,
-      y: 0.6 + rng() * 0.34,
+      x: spot.x,
+      y: spot.y,
       tx: null, ty: null,     // wander target (ephemeral, not clocked)
       act: 'wander',
       actUntil: 0,
@@ -329,6 +474,7 @@
    * an open tab doesn't inflate merge ordering. */
   function kithTick(w, dt) {
     var now = env.now();
+    var terrain = makeTerrain(w.id);
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
     var blooming = Object.keys(w.plants).map(function (id) { return w.plants[id]; })
       .filter(function (p) { return p.growth > 0.55; });
@@ -366,20 +512,30 @@
           k.actUntil = now + (4 + rng() * 10) * 1000;
           return;
         }
-        k.tx = 0.05 + rng() * 0.9;
-        k.ty = 0.57 + rng() * 0.38;
+        // pick somewhere new to be — on land; kith won't swim (yet)
+        for (var tries = 0; tries < 8; tries++) {
+          var cx = 0.05 + rng() * 0.9;
+          var cy = 0.57 + rng() * 0.38;
+          if (isLandAt(terrain, cx, cy)) { k.tx = cx; k.ty = cy; break; }
+        }
       }
 
-      // walk toward target
+      // walk toward target, stopping at the water's edge
       if (k.tx !== null) {
         var dx = k.tx - k.x, dy = k.ty - k.y;
         var dist = Math.sqrt(dx * dx + dy * dy);
         var stageSpeed = kithStage(k, now) === 'elder' ? 0.6 : 1;
         var step = Math.min(dist, k.genome.speed * stageSpeed * dt);
         if (dist > 0.0001) {
-          k.x += (dx / dist) * step;
-          k.y += (dy / dist) * step;
-          if (Math.abs(dx) > 0.002) k.facing = dx > 0 ? 1 : -1;
+          var nx = k.x + (dx / dist) * step;
+          var ny = k.y + (dy / dist) * step;
+          if (!isLandAt(terrain, nx, ny)) {
+            k.tx = null; k.ty = null; // shoreline reached — think again next tick
+          } else {
+            k.x = nx;
+            k.y = ny;
+            if (Math.abs(dx) > 0.002) k.facing = dx > 0 ? 1 : -1;
+          }
         }
       }
     });
@@ -531,6 +687,8 @@
           genome: crossGenomes(rng, plantParents[0].genome, plantParents[1].genome, PLANT_GENE_SPEC),
           x: 0.2 + rng() * 0.6,
           y: 0.6 + rng() * 0.3,
+          // hybrid vigour is inherited, not local — identical in every copy
+          soil: ((plantParents[0].soil || 1) + (plantParents[1].soil || 1)) / 2,
           planted: now,
           tick: now,
           growth: 0.15,
@@ -568,6 +726,9 @@
         }
       }
     }
+
+    // Travellers (and merge-born newcomers) settle onto this world's own land.
+    settleImmigrants(w);
 
     return {
       same: sameWorld,
@@ -611,6 +772,12 @@
     setEnv: setEnv,
     hash32: hash32,
     mulberry32: mulberry32,
+    makeTerrain: makeTerrain,
+    biomeAt: biomeAt,
+    biomeInfo: function (key) { return BIOMES[key]; },
+    isLandAt: isLandAt,
+    isSoilAt: isSoilAt,
+    settleImmigrants: settleImmigrants,
     newWorld: newWorld,
     looksLikeWorld: looksLikeWorld,
     ensureKith: ensureKith,
