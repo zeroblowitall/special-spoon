@@ -39,6 +39,26 @@ html, body {
   to { transform: rotate(1.8deg); }
 }
 .plant-group.selected .sway { animation-duration: 2.5s; }
+
+/* The kith */
+.kith-group { cursor: pointer; }
+.kith-bob {
+  animation: kithbob 1.8s ease-in-out infinite alternate;
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+@keyframes kithbob {
+  from { transform: translateY(0); }
+  to { transform: translateY(-1.6px); }
+}
+.emissary-ring {
+  animation: emissaryspin 14s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes emissaryspin {
+  to { transform: rotate(360deg); }
+}
 .plant-label {
   font-family: Georgia, serif;
   font-size: 12px;

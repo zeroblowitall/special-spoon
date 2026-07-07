@@ -21,18 +21,22 @@ function fail(message) {
 
 const shell = fs.readFileSync(path.join(ENGINE, 'shell.html'), 'utf8');
 const style = fs.readFileSync(path.join(ENGINE, 'style.css'), 'utf8');
+const world = fs.readFileSync(path.join(ENGINE, 'world.js'), 'utf8');
 const app = fs.readFileSync(path.join(ENGINE, 'app.js'), 'utf8');
 const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'version.json'), 'utf8')).version;
 
 // The engine must be able to rebuild the file from inside a browser
 // (the Preserve button), which forbids nested '</script>' sequences.
-if (/<\/script>/i.test(app.replace(/<\\\/script>/g, ''))) {
-  fail('engine/app.js contains a literal </script>, which would break the self-writing file');
+for (const [name, src] of [['world.js', world], ['app.js', app]]) {
+  if (/<\/script>/i.test(src.replace(/<\\\/script>/g, ''))) {
+    fail(`engine/${name} contains a literal </script>, which would break the self-writing file`);
+  }
 }
 
 let html = shell;
 html = html.replace('/*__STYLE__*/', () => style);
 html = html.replace('/*__STATE__*/', () => 'null /* driftgarden v' + version + ' */');
+html = html.replace('/*__WORLD__*/', () => world);
 html = html.replace('/*__APP__*/', () => app);
 if (html.includes('/*__')) fail('an unfilled placeholder remains in the shell');
 

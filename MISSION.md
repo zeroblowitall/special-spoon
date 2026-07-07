@@ -31,6 +31,8 @@ There is no multiplayer server. There are no accounts. The social layer of this 
 4. **Drift is a feature.** Copies are *supposed* to diverge. There is no "canonical" world, no conflict to resolve — only reunion.
 5. **Charm over content.** A small world that feels alive beats a big world that feels like a database. Plants sway. Names matter.
 6. **The learner owns everything** — carried over from this project's ancestor: no telemetry, no accounts, no network calls. Ever.
+7. **No borrowed minds.** The beings of this world may never depend on an external AI service. Their intelligence must be *grown* — evolved, learned, and emergent — so that it belongs to the file, works offline forever, and merges like everything else.
+8. **Beings are invited, never commanded.** The player is a gentle god: they may bless, name, beckon, and gift — but no creature takes orders. What the world becomes is the world's own doing.
 
 ## The long game
 

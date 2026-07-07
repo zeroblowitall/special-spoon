@@ -9,11 +9,13 @@ Driftgarden is a game genre that hasn't existed before: **play by diaspora.** Yo
 ## How it works
 
 1. **Tend.** Plant seeds. Water them. Name the ones you love. The garden grows in real time — even while the file sleeps.
-2. **Preserve.** One button, and the game *rewrites itself* into a fresh file with your world embedded. That downloaded file **is** your world.
-3. **Set it free.** Email it, USB-stick it, drop it in a family folder. Every copy starts drifting the moment it leaves you.
-4. **Reunite.** Drag another Driftgarden file onto yours (or paste it). The worlds become one: union of every plant, both chronicles braided into a single history, lineage remembered forever — and a hybrid is born from the proudest plant of each side. *"From the meeting, a new species was born: the Clovebloom — child of Grandfather the Thistledrop and Old Marta the Frostcap."*
+2. **Meet the kith.** Small beings live among your plants. They wander, sip nectar from blooms, doze, and grow from young to elder. Click one to meet it; give it a name it will carry across every world it ever reaches.
+3. **Bless an emissary.** Choose one kith as *yours* — your token in the world. When worlds merge, your emissary leads the meeting.
+4. **Preserve.** One button, and the game *rewrites itself* into a fresh file with your world embedded. That downloaded file **is** your world.
+5. **Set it free.** Email it, USB-stick it, drop it in a family folder. Every copy starts drifting the moment it leaves you.
+6. **Reunite.** Drag another Driftgarden file onto yours (or paste it). The worlds become one: every plant, every kith, both chronicles braided into a single history, lineage remembered forever. On a first meeting, the two emissaries meet at the meeting stone and **a child of both worlds is born** — and the proudest plants of each side cross into a new species. *"The emissaries Rutaruk and Queen Meloa met at the meeting stone. A child was born of the two worlds: Mifemir."*
 
-Merging is **lossless, deterministic, and repeatable**: both copies merging each other produce the identical world, nothing is ever overwritten or lost, and re-merging the same file is a harmless reunion, not a duplicate. Worlds only give birth the *first* time they meet.
+Merging is **lossless, deterministic, and repeatable** — and that is not a slogan, it's a test suite (`node test.js`): both copies merging each other produce the identical world, nothing is ever overwritten or lost, and re-merging a known world is a quiet reunion, not a duplicate. Worlds only give birth the *first* time they meet.
 
 ## Why this matters beyond a game
 
@@ -32,8 +34,10 @@ node build.js
 | Path | What it is |
 |---|---|
 | `dist/driftgarden.html` | **The product.** A seed file: a world is born when it's opened. |
-| `engine/` | The whole game — vanilla JS/CSS/HTML, zero dependencies |
+| `engine/world.js` | All world truth: genomes, growth, kith, chronicle, the merge. Runs identically in the browser and in Node |
+| `engine/app.js` | The interface: rendering, panels, heartbeats |
 | `build.js` | The whole build system — one Node script |
+| `test.js` | The merge proven as executable fact — determinism, no-loss, reunion |
 | `MISSION.md` | What this project is and refuses to stop being |
 | `reports/` | One-page diary of each working session |
 
