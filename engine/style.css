@@ -1,0 +1,200 @@
+/* Driftgarden — vanilla CSS, no dependencies. */
+
+:root {
+  --panel: rgba(20, 26, 22, 0.82);
+  --panel-line: rgba(255, 255, 255, 0.14);
+  --ink: #f2f0e8;
+  --ink-soft: #b9bdb2;
+  --accent: #ffd166;
+  --good: #7ce38b;
+  --bad: #ff8a7a;
+  --radius: 12px;
+  font-size: 16px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: Georgia, "Times New Roman", serif;
+  color: var(--ink);
+  background: #101613;
+}
+
+#stage { height: 100%; position: relative; }
+
+/* The world itself */
+#world { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+.plant-group { cursor: pointer; }
+.plant-group .sway {
+  animation: sway 6s ease-in-out infinite alternate;
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+@keyframes sway {
+  from { transform: rotate(-1.6deg); }
+  to { transform: rotate(1.8deg); }
+}
+.plant-group.selected .sway { animation-duration: 2.5s; }
+.plant-label {
+  font-family: Georgia, serif;
+  font-size: 12px;
+  fill: rgba(255, 255, 255, 0.85);
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.45);
+  stroke-width: 2.5px;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+/* Top bar */
+#topbar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.65rem 0.9rem;
+  background: linear-gradient(rgba(10, 14, 11, 0.65), transparent);
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+#world-name {
+  font-size: 1.05rem;
+  font-weight: 650;
+  background: none;
+  border: none;
+  color: var(--ink);
+  cursor: pointer;
+  font-family: Georgia, serif;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+  padding: 0.2rem 0.4rem;
+  border-radius: 8px;
+}
+#world-name:hover { background: rgba(255,255,255,0.1); }
+#world-name .gen { font-size: 0.75rem; color: var(--ink-soft); font-style: italic; }
+
+.bar-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
+
+.btn {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border: 1px solid var(--panel-line);
+  border-radius: 99px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 0.42rem 0.9rem;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #2a2105; }
+.btn.primary:hover { color: #000; }
+.btn:disabled { opacity: 0.45; cursor: default; }
+:is(button, input, textarea):focus-visible { outline: 3px solid #6db3ff; outline-offset: 2px; }
+
+/* Side panel (selected plant) */
+#panel {
+  position: absolute;
+  right: 0.9rem;
+  bottom: 0.9rem;
+  width: min(300px, calc(100vw - 1.8rem));
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  backdrop-filter: blur(8px);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.86rem;
+}
+#panel h2 { margin: 0 0 0.15rem; font-family: Georgia, serif; font-size: 1.1rem; }
+#panel .species { color: var(--ink-soft); font-style: italic; margin-bottom: 0.5rem; }
+#panel .row { display: flex; gap: 0.4rem; margin-top: 0.6rem; flex-wrap: wrap; }
+#panel .meta { color: var(--ink-soft); line-height: 1.5; }
+#panel .hybrid-note { color: var(--accent); margin-top: 0.4rem; line-height: 1.45; }
+
+/* Modals */
+.modal-veil {
+  position: absolute; inset: 0;
+  background: rgba(5, 8, 6, 0.6);
+  display: flex; align-items: center; justify-content: center;
+  padding: 1rem;
+}
+.modal {
+  background: #171d19;
+  border: 1px solid var(--panel-line);
+  border-radius: var(--radius);
+  width: min(560px, 100%);
+  max-height: 82vh;
+  overflow-y: auto;
+  padding: 1.1rem 1.25rem;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+.modal h2 { font-family: Georgia, serif; margin: 0 0 0.5rem; }
+.modal .muted { color: var(--ink-soft); }
+.modal textarea, .modal input[type="text"] {
+  width: 100%;
+  background: #0e1310;
+  color: var(--ink);
+  border: 1px solid var(--panel-line);
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+.modal textarea { min-height: 6rem; font-family: Consolas, monospace; font-size: 0.72rem; }
+.modal .row { display: flex; gap: 0.5rem; margin-top: 0.75rem; flex-wrap: wrap; align-items: center; }
+
+.dropzone {
+  border: 2px dashed var(--panel-line);
+  border-radius: var(--radius);
+  padding: 1.4rem 1rem;
+  text-align: center;
+  color: var(--ink-soft);
+  margin: 0.75rem 0;
+}
+.dropzone.hot { border-color: var(--accent); color: var(--accent); }
+
+/* Chronicle */
+.chronicle-entry { display: flex; gap: 0.6rem; padding: 0.4rem 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.chronicle-entry .when { color: var(--ink-soft); white-space: nowrap; font-size: 0.78rem; padding-top: 0.1rem; }
+.chronicle-entry .what { flex: 1; }
+.chronicle-entry.kind-merge .what { color: var(--accent); }
+.chronicle-entry.kind-born .what { color: var(--good); }
+
+/* Toasts */
+#toast {
+  position: absolute;
+  left: 50%;
+  bottom: 1.2rem;
+  transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  color: var(--ink);
+  border-radius: 99px;
+  padding: 0.5rem 1.1rem;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.85rem;
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  max-width: 90vw;
+  text-align: center;
+}
+#toast.show { opacity: 1; }
+
+/* Merge celebration */
+.merge-flash {
+  position: absolute; inset: 0;
+  background: radial-gradient(circle, rgba(255, 209, 102, 0.35), transparent 70%);
+  animation: mergeflash 1.6s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes mergeflash { from { opacity: 1; } to { opacity: 0; } }
