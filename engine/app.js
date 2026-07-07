@@ -53,9 +53,24 @@
     }
     W.ensureKith(state);        // worlds preserved before the kith existed get theirs
     W.settleImmigrants(state);  // worlds preserved before the land existed settle onto it
+    bootNews = W.catchUp(state); // life went on while the file slept
     W.advanceGrowth(state);
     W.weatherTick(state);       // today's sky is chronicled from the first moment
     save();
+  }
+
+  var bootNews = [];
+
+  function announceNews(events) {
+    if (!events || events.length === 0) return;
+    var births = events.filter(function (e) { return e.kind === 'born'; }).length;
+    var passings = events.filter(function (e) { return e.kind === 'passing'; }).length;
+    if (events.length === 1) { toast(events[0].text); return; }
+    var bits = [];
+    if (births) bits.push(births === 1 ? 'a child was born' : births + ' children were born');
+    if (passings) bits.push(passings === 1 ? 'one of the kith fell asleep beneath the soil' : passings + ' kith fell asleep beneath the soil');
+    if (bits.length === 0) { toast(events[events.length - 1].text); return; }
+    toast('While the world slept: ' + bits.join(', and ') + '. The chronicle remembers everything.');
   }
 
   /* ---------- ephemeral UI state ---------- */
@@ -306,7 +321,7 @@
 
   function drawAllKith() {
     var now = Date.now();
-    return Object.keys(state.kith).map(function (id) { return state.kith[id]; })
+    return W.livingKith(state)
       .sort(function (a, b) { return a.y - b.y; })
       .map(function (k) { return drawKith(k, now); })
       .join('');
@@ -364,17 +379,16 @@
   function updateKithLayer() {
     var layer = document.getElementById('kith-layer');
     if (!layer) return;
-    var now = Date.now();
+    var living = W.livingKith(state);
     var missing = false;
-    Object.keys(state.kith).forEach(function (id) {
-      var node = layer.querySelector('[data-kith="' + id + '"]');
+    living.forEach(function (k) {
+      var node = layer.querySelector('[data-kith="' + k.id + '"]');
       if (!node) { missing = true; return; }
-      var k = state.kith[id];
       var pos = toScreen(k.x, k.y);
       node.setAttribute('transform', 'translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')');
     });
-    if (missing || layer.querySelectorAll('.kith-group').length !== Object.keys(state.kith).length) {
-      render(); // population changed — rebuild properly
+    if (missing || layer.querySelectorAll('.kith-group').length !== living.length) {
+      render(); // someone was born, or someone left us — rebuild properly
     }
   }
 
@@ -436,9 +450,35 @@
     var stage = W.kithStage(k, now);
     var days = Math.floor((now - k.born) / 86400000);
     var ageText = days < 1 ? 'born today' : days + (days === 1 ? ' day' : ' days') + ' old';
-    var mood = k.act === 'eat' ? 'sipping nectar' : k.act === 'rest' ? 'dozing' :
+
+    if (k.passed) {
+      return '<div id="panel">' +
+        '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
+        '<div class="species">remembered</div>' +
+        '<div class="meta">lived ' + Math.max(1, Math.round((k.passed - k.born) / 86400000)) + ' days · fell asleep beneath the soil</div>' +
+        (k.bornOfMerge ? '<div class="hybrid-note">✦ Was born of the meeting of ' + escapeHtml(k.bornOfMerge.worlds[0]) + ' and ' + escapeHtml(k.bornOfMerge.worlds[1]) + '.</div>' : '') +
+        '<div class="row"><button class="btn" data-act="close-panel">Close</button></div></div>';
+    }
+
+    var mood = k.starving ? 'starving' :
+      k.act === 'eat' ? 'sipping nectar' :
+      k.act === 'shelter' ? 'sheltering from the storm' :
+      k.act === 'rest' ? 'dozing' :
       k.energy < 0.3 ? 'hungry' : k.energy < 0.55 ? 'peckish' : 'content';
     var emissary = state.emissary === k.id;
+
+    var bonds = Object.keys(k.trust || {}).filter(function (id) { return k.trust[id] >= 0.5 && state.kith[id] && !state.kith[id].passed; });
+    var bondLine = bonds.length
+      ? 'fond of ' + bonds.slice(0, 3).map(function (id) { return escapeHtml(W.kithLabel(state.kith[id])); }).join(', ') + (bonds.length > 3 ? '…' : '')
+      : null;
+    var tastes = Object.keys(k.taste || {});
+    var tasteLine = null;
+    if (tastes.length) {
+      tastes.sort(function (a, b) { return k.taste[b] - k.taste[a]; });
+      var fav = tastes[0], worst = tastes[tastes.length - 1];
+      if (k.taste[fav] > 0.25) tasteLine = 'has a taste for ' + escapeHtml(fav);
+      if (k.taste[worst] < -0.35) tasteLine = (tasteLine ? tasteLine + '; ' : '') + 'can’t abide ' + escapeHtml(worst);
+    }
     var mergeNote = k.bornOfMerge
       ? '<div class="hybrid-note">✦ Born at the meeting stone when <strong>' + escapeHtml(k.bornOfMerge.worlds[0]) +
         '</strong> met <strong>' + escapeHtml(k.bornOfMerge.worlds[1]) + '</strong> — child of the emissaries ' +
@@ -452,6 +492,8 @@
       '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
       '<div class="species">a ' + stage + ' kith' + (k.name ? ' · called ' + escapeHtml(k.given) + ' by its kin' : '') + '</div>' +
       '<div class="meta">' + ageText + ' · ' + mood + ' · on the ' + standing + '</div>' +
+      (bondLine ? '<div class="meta">' + bondLine + '</div>' : '') +
+      (tasteLine ? '<div class="meta">' + tasteLine + '</div>' : '') +
       mergeNote + emissaryNote +
       '<div class="row">' +
       '<button class="btn" data-act="name-kith">Name…</button>' +
@@ -541,7 +583,7 @@
         if (!W.looksLikeWorld(w)) continue;
         worlds.push({
           id: w.id, name: w.name, touched: w.touched || 0,
-          kith: Object.keys(w.kith || {}).length,
+          kith: W.livingKith(w).length,
           plants: Object.keys(w.plants).length
         });
       }
@@ -554,7 +596,9 @@
     state = worldState;
     W.ensureKith(state);
     W.settleImmigrants(state);
+    W.catchUp(state); // a visited world lived on while it slept
     W.advanceGrowth(state);
+    W.weatherTick(state);
     save();
     selected = null;
     openModal = null;
@@ -778,7 +822,11 @@
 
   // The kith live: think & move every couple of seconds, glide between beats.
   setInterval(function () {
-    W.kithTick(state, KITH_TICK_MS / 1000);
+    var events = W.kithTick(state, KITH_TICK_MS / 1000);
+    if (events && events.length > 0) {
+      save();
+      announceNews(events);
+    }
     if (!openModal) updateKithLayer();
   }, KITH_TICK_MS);
 
@@ -794,4 +842,5 @@
 
   boot();
   render();
+  announceNews(bootNews);
 })();

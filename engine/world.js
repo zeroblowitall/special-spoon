@@ -33,6 +33,7 @@
 
   /* ---------- constants ---------- */
 
+  var DAY = 24 * 60 * 60 * 1000;
   var GROW_HOURS = 36;
   var WATER_BOOST = 0.06;
   var WATER_COOLDOWN = 60 * 60 * 1000;
@@ -226,6 +227,30 @@
     hue: [0, 359, true], size: [0.7, 1.4], speed: [0.008, 0.03],
     ears: [0, 2, true], voice: [0, 0] // arrays are spliced, bounds unused
   };
+
+  /* The mind: evolvable weights a kith is born with. Behaviour follows from
+   * these, so selection quietly reshapes temperament over generations. */
+  function newKithBrain(rng) {
+    return {
+      curiosity: 0.1 + rng() * 0.85,
+      sociability: 0.1 + rng() * 0.85,
+      boldness: 0.1 + rng() * 0.85,
+      wanderlust: 0.1 + rng() * 0.85,
+      appetite: 0.25 + rng() * 0.7,
+      patience: 0.1 + rng() * 0.85
+    };
+  }
+
+  var BRAIN_SPEC = {
+    curiosity: [0.05, 1], sociability: [0.05, 1], boldness: [0.05, 1],
+    wanderlust: [0.05, 1], appetite: [0.05, 1], patience: [0.05, 1]
+  };
+
+  // How a given plant species agrees with a given kith — fixed at the level
+  // of physiology, identical in every copy of the world.
+  function inbornLiking(kithId, species) {
+    return ((hash32(kithId + '~' + species) % 201) - 100) / 100; // -1..1
+  }
 
   /* ---------- the land ----------
    * Terrain is IDENTITY, not content: it is derived purely from the world's
@@ -477,6 +502,8 @@
       merges: 0
     };
     chronicle(w, 'born', 'The world ' + w.name + ' came into being.');
+    plantSeed(w, true); // wild things grew here first —
+    plantSeed(w, true); // — no founder starves before the first garden
     spawnFounderKith(w);
     return w;
   }
@@ -486,15 +513,17 @@
       typeof obj.clock === 'number' && obj.plants && Array.isArray(obj.chronicle));
   }
 
-  // Worlds preserved before the kith existed get theirs on first waking.
+  // Worlds preserved before the kith existed get theirs on first waking;
+  // kith from before minds existed grow theirs.
   function ensureKith(w) {
     if (!w.kith) { w.kith = {}; w.emissary = null; }
     if (Object.keys(w.kith).length === 0) spawnFounderKith(w);
+    migrateKith(w);
   }
 
   /* ---------- plants ---------- */
 
-  function plantSeed(w) {
+  function plantSeed(w, wild) {
     var rng = mulberry32(hash32(w.id + ':' + (w.clock + 1)));
     var id = env.newId();
     var terrain = makeTerrain(w.id);
@@ -520,8 +549,14 @@
       u: bumpClock(w)
     };
     w.plants[id] = plant;
-    chronicle(w, 'plant', 'A ' + plant.species + ' seed was planted in the ' +
-      BIOMES[biomeAt(terrain, spot.x, spot.y)].name + '.');
+    if (wild) {
+      plant.growth = 0.4 + mulberry32(hash32(id + ':wild'))() * 0.4; // already coming up
+      chronicle(w, 'plant', 'A wild ' + plant.species + ' has grown in the ' +
+        BIOMES[biomeAt(terrain, spot.x, spot.y)].name + ' since before the world had its name.');
+    } else {
+      chronicle(w, 'plant', 'A ' + plant.species + ' seed was planted in the ' +
+        BIOMES[biomeAt(terrain, spot.x, spot.y)].name + '.');
+    }
     return plant;
   }
 
@@ -565,19 +600,26 @@
 
   /* ---------- kith ---------- */
 
-  function makeKith(w, rng, genome, parents, origin) {
-    var id = env.newId();
+  function makeKith(w, rng, genome, parents, origin, fixedId) {
+    var id = fixedId || env.newId();
     var spot = findSpot(w, 'kith:' + id, isLandAt);
+    var spanRng = mulberry32(hash32(id + ':span'));
     var kith = {
       id: id,
       genome: genome,
+      brain: newKithBrain(rng),
       given: makeKithName(rng, genome.voice),
       name: null,             // a name the player bestows
       born: env.now(),
+      span: 14 + Math.floor(spanRng() * 9), // days of life, decided at birth —
+      passed: null,           // — so every copy records the same passing
       parents: parents || null,
       origin: origin || w.id,
       bornOfMerge: null,
       energy: 0.7 + rng() * 0.3,
+      starving: null,
+      taste: {},              // plantSpecies -> learned liking
+      trust: {},              // kithId -> learned trust; >= 0.5 is a bond
       x: spot.x,
       y: spot.y,
       tx: null, ty: null,     // wander target (ephemeral, not clocked)
@@ -600,15 +642,40 @@
       names[0] + ', ' + names[1] + ' and ' + names[2] + '.');
   }
 
+  // Kith from before minds existed grow theirs on first waking — derived
+  // from their own identity, so every copy grows the same mind.
+  function migrateKith(w) {
+    Object.keys(w.kith || {}).forEach(function (id) {
+      var k = w.kith[id];
+      if (!k.brain) {
+        var rng = mulberry32(hash32(k.id + ':mind'));
+        k.brain = newKithBrain(rng);
+        var spanRng = mulberry32(hash32(k.id + ':span'));
+        k.span = 14 + Math.floor(spanRng() * 9);
+        k.passed = null;
+        k.starving = null;
+        k.taste = {};
+        k.trust = {};
+      }
+    });
+  }
+
+  function isAlive(k) { return !k.passed; }
+
+  function livingKith(w) {
+    return Object.keys(w.kith || {}).map(function (id) { return w.kith[id]; }).filter(isAlive);
+  }
+
   function kithLabel(k) {
     return k.name ? k.name : k.given;
   }
 
   function kithStage(k, now) {
+    if (k.passed) return 'passed';
     var days = (now - k.born) / 86400000;
-    for (var i = 0; i < KITH_STAGES.length; i++) {
-      if (days < KITH_STAGES[i].until) return KITH_STAGES[i].name;
-    }
+    var span = k.span || 16;
+    if (days < 1) return 'young';
+    if (days < span * 0.72) return 'grown';
     return 'elder';
   }
 
@@ -630,53 +697,189 @@
       (previous && previous !== kithLabel(k) ? ', taking the mantle from ' + previous : '') + '.');
   }
 
-  /* The heartbeat: advance every kith by dt seconds. Movement and hunger are
-   * ephemeral flavour — they deliberately do NOT bump the logical clock, so
-   * an open tab doesn't inflate merge ordering. */
+  /* ---------- mortality & birth: the deterministic backbone ----------
+   * A kith's lifespan is decided at birth, so EVERY copy of a world records
+   * the same passing at the same moment, with the same chronicle id — the
+   * copies drift, but death and birth reconcile perfectly on merge. */
+
+  var STARVE_HOURS = 48;
+
+  function markPassing(w, k, at, cause) {
+    if (k.passed) return null;
+    k.passed = at;
+    k.u = bumpClock(w);
+    if (w.emissary === k.id) w.emissary = null;
+    var text = cause === 'hunger'
+      ? kithLabel(k) + ' grew too weak in a hungry season, and fell asleep beneath the soil.'
+      : kithLabel(k) + ' grew old and full of days, and fell asleep beneath the soil. The world remembers.';
+    chronicle(w, 'passing', text, 'd' + k.id);
+    return { kind: 'passing', text: text };
+  }
+
+  function checkMortality(w, atTime) {
+    var events = [];
+    Object.keys(w.kith || {}).forEach(function (id) {
+      var k = w.kith[id];
+      if (k.passed) return;
+      var dueAt = k.born + (k.span || 16) * DAY;
+      if (atTime >= dueAt) {
+        var e = markPassing(w, k, dueAt, 'age');
+        if (e) events.push(e);
+      } else if (k.starving && atTime - k.starving > STARVE_HOURS * 3600 * 1000) {
+        var e2 = markPassing(w, k, k.starving + STARVE_HOURS * 3600 * 1000, 'hunger');
+        if (e2) events.push(e2);
+      }
+    });
+    return events;
+  }
+
+  /* A child of the same two parents on the same day has the same identity
+   * in every copy of the world — births merge without duplication. */
+  function birthChild(w, a, b, dayBucket) {
+    var pairKey = [a.id, b.id].sort().join('+');
+    var childId = 'c' + hash32(pairKey + ':' + dayBucket).toString(16) + hash32(dayBucket + ':' + pairKey).toString(16);
+    if (w.kith[childId]) return null; // this pair already had today's child
+    if (livingKith(w).length >= KITH_CAP) return null;
+    var rng = mulberry32(hash32(childId));
+    var parents = [a, b].sort(function (x, y) { return x.id < y.id ? -1 : 1; });
+    var genome = crossGenomes(rng, parents[0].genome, parents[1].genome, KITH_GENE_SPEC);
+    var child = makeKith(w, rng, genome, [parents[0].id, parents[1].id], w.id, childId);
+    child.brain = crossGenomes(rng, parents[0].brain, parents[1].brain, BRAIN_SPEC);
+    child.x = (a.x + b.x) / 2; child.y = (a.y + b.y) / 2;
+    a.energy = Math.max(0.2, a.energy - 0.3);
+    b.energy = Math.max(0.2, b.energy - 0.3);
+    a.u = bumpClock(w); b.u = bumpClock(w);
+    var text = kithLabel(parents[0]) + ' and ' + kithLabel(parents[1]) + ' had a child: ' + child.given + '.';
+    chronicle(w, 'born', text, 'b' + childId);
+    return { kind: 'born', text: text, child: child };
+  }
+
+  /* ---------- the heartbeat: minds at work ----------
+   * Movement, hunger, moods and slow trust-drift are ephemeral flavour and
+   * do NOT bump the logical clock; only milestones (bonds, births, deaths,
+   * memories' first formation) are clocked content. */
   function kithTick(w, dt) {
     var now = env.now();
+    var events = checkMortality(w, now);
     var terrain = makeTerrain(w.id);
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
+    var storm = weatherAt(w.id, now).kind === 'storm';
+    var alive = livingKith(w);
     var blooming = Object.keys(w.plants).map(function (id) { return w.plants[id]; })
       .filter(function (p) { return p.growth > 0.55; });
+    var dayBucket = Math.floor(now / DAY);
 
-    Object.keys(w.kith).forEach(function (id) {
-      var k = w.kith[id];
-      k.energy = Math.max(0, k.energy - ENERGY_DECAY_PER_SEC * dt);
+    alive.forEach(function (k) {
+      var decay = ENERGY_DECAY_PER_SEC * (storm && k.act !== 'shelter' ? 1.5 : 1) * dt;
+      k.energy = Math.max(0, k.energy - decay);
+      if (k.energy <= 0 && !k.starving) k.starving = now;
 
       if (k.act === 'eat') {
-        if (now >= k.actUntil) { k.energy = 1; k.act = 'wander'; k.tx = null; }
+        if (now >= k.actUntil) {
+          var plant = k.eating ? w.plants[k.eating] : null;
+          var meal = 0.5;
+          if (plant) {
+            var liking = inbornLiking(k.id, plant.species);
+            meal = 0.45 + liking * 0.3;
+            var learned = (k.taste[plant.species] === undefined);
+            k.taste[plant.species] = liking; // it now KNOWS how this tastes
+            if (learned) {
+              // cap the memory; forget the blandest first, deterministically
+              var species = Object.keys(k.taste);
+              if (species.length > 12) {
+                species.sort(function (s1, s2) { return Math.abs(k.taste[s1]) - Math.abs(k.taste[s2]) || (s1 < s2 ? -1 : 1); });
+                delete k.taste[species[0]];
+              }
+              k.u = bumpClock(w);
+            }
+            plant.sipped = now;
+          }
+          k.energy = Math.min(1, k.energy + Math.max(0.15, meal));
+          if (k.energy > 0.25) k.starving = null;
+          k.act = 'wander'; k.eating = null; k.tx = null;
+        }
         return; // stay put while sipping
       }
-      if (k.act === 'rest') {
-        if (now >= k.actUntil) { k.act = 'wander'; k.tx = null; }
+      if (k.act === 'rest' || k.act === 'shelter') {
+        if (k.act === 'shelter' && !storm) { k.act = 'wander'; k.tx = null; }
+        else if (k.act === 'rest' && now >= k.actUntil) { k.act = 'wander'; k.tx = null; }
+        else if (k.act === 'shelter') return;
         else return;
       }
 
-      // hungry? head for the nearest bloom
-      if (k.energy < 0.45 && blooming.length > 0) {
-        var nearest = null, nearestD = Infinity;
-        blooming.forEach(function (p) {
-          var d = (p.x - k.x) * (p.x - k.x) + (p.y - k.y) * (p.y - k.y);
-          if (d < nearestD) { nearestD = d; nearest = p; }
-        });
-        k.tx = nearest.x; k.ty = nearest.y;
-        if (Math.sqrt(nearestD) < 0.035) {
-          k.act = 'eat';
-          k.actUntil = now + EAT_SECONDS * 1000;
+      /* -- the mind chooses -- */
+      var brain = k.brain;
+      var hungerUrge = (1 - k.energy) * (0.6 + brain.appetite * 0.8);
+      var stormUrge = storm ? (1.2 - brain.boldness) : 0;
+      var socialUrge = brain.sociability * 0.55;
+      var wanderUrge = 0.15 + brain.curiosity * 0.35;
+      var restUrge = brain.patience * 0.3 * rng();
+
+      if (stormUrge > hungerUrge && stormUrge > 0.5) {
+        // make for high ground (rock shrugs off weather) or hunker down
+        var refuge = null;
+        for (var st = 0; st < 10; st++) {
+          var sx = Math.max(0.03, Math.min(0.97, k.x + (rng() - 0.5) * 0.3));
+          var sy = Math.max(0.56, Math.min(0.97, k.y + (rng() - 0.5) * 0.3));
+          var sb = biomeAt(terrain, sx, sy);
+          if (sb === 'rock' || sb === 'peak') { refuge = { x: sx, y: sy }; break; }
+        }
+        if (refuge && (Math.abs(refuge.x - k.x) > 0.02 || Math.abs(refuge.y - k.y) > 0.02)) {
+          k.tx = refuge.x; k.ty = refuge.y;
+        } else {
+          k.act = 'shelter'; k.tx = null;
           return;
+        }
+      } else if (hungerUrge > 0.45 && blooming.length > 0) {
+        // seek food it LIKES, if it knows any; else the nearest bloom
+        var best = null, bestScore = -Infinity;
+        blooming.forEach(function (p) {
+          var d = Math.sqrt((p.x - k.x) * (p.x - k.x) + (p.y - k.y) * (p.y - k.y));
+          var known = k.taste[p.species];
+          var fresh = (!p.sipped || now - p.sipped > 30 * 60 * 1000) ? 0 : -0.8;
+          var score = (known !== undefined ? known * 0.6 : 0.15) - d * 2 + fresh;
+          if (score > bestScore) { bestScore = score; best = p; }
+        });
+        if (best) {
+          var bd = Math.sqrt((best.x - k.x) * (best.x - k.x) + (best.y - k.y) * (best.y - k.y));
+          k.tx = best.x; k.ty = best.y;
+          if (bd < 0.035) {
+            k.act = 'eat'; k.eating = best.id;
+            k.actUntil = now + EAT_SECONDS * 1000;
+            return;
+          }
+        }
+      } else if (socialUrge > wanderUrge && socialUrge > restUrge && alive.length > 1 && rng() < 0.5) {
+        // seek company — the most trusted friend, or someone new if curious
+        var friend = null, friendScore = -Infinity;
+        alive.forEach(function (other) {
+          if (other.id === k.id) return;
+          var t = k.trust[other.id] || 0;
+          var d2 = Math.sqrt((other.x - k.x) * (other.x - k.x) + (other.y - k.y) * (other.y - k.y));
+          var s2 = t + brain.curiosity * 0.2 - d2;
+          if (s2 > friendScore) { friendScore = s2; friend = other; }
+        });
+        if (friend) {
+          var fd = Math.sqrt((friend.x - k.x) * (friend.x - k.x) + (friend.y - k.y) * (friend.y - k.y));
+          if (fd < 0.05) {
+            // arrived beside them — linger; the encounter pass does the rest
+            k.act = 'rest';
+            k.actUntil = now + (3 + rng() * 5) * 1000;
+            return;
+          }
+          k.tx = friend.x; k.ty = friend.y;
         }
       } else if (k.tx === null || (Math.abs(k.tx - k.x) < 0.01 && Math.abs(k.ty - k.y) < 0.01)) {
-        // arrived (or aimless): rest a moment, or pick somewhere new to be
-        if (rng() < 0.35) {
+        if (rng() < brain.patience * 0.6) {
           k.act = 'rest';
-          k.actUntil = now + (4 + rng() * 10) * 1000;
+          k.actUntil = now + (4 + rng() * 12) * 1000;
           return;
         }
-        // pick somewhere new to be — on land; kith won't swim (yet)
+        // pick somewhere new to be — on land; range set by wanderlust
         for (var tries = 0; tries < 8; tries++) {
-          var cx = 0.05 + rng() * 0.9;
-          var cy = 0.57 + rng() * 0.38;
+          var range = 0.1 + k.brain.wanderlust * 0.5;
+          var cx = Math.max(0.03, Math.min(0.97, k.x + (rng() - 0.5) * range * 2));
+          var cy = Math.max(0.56, Math.min(0.97, k.y + (rng() - 0.5) * range));
           if (isLandAt(terrain, cx, cy)) { k.tx = cx; k.ty = cy; break; }
         }
       }
@@ -700,6 +903,105 @@
         }
       }
     });
+
+    /* -- encounters: whenever paths cross, hearts do the rest -- */
+    for (var ai = 0; ai < alive.length; ai++) {
+      for (var bi = ai + 1; bi < alive.length; bi++) {
+        var ka = alive[ai], kb = alive[bi];
+        if (ka.passed || kb.passed) continue;
+        var ed = Math.sqrt((ka.x - kb.x) * (ka.x - kb.x) + (ka.y - kb.y) * (ka.y - kb.y));
+        if (ed >= 0.05) continue;
+        // together: trust grows (slow drift, not clocked)
+        var beforeA = ka.trust[kb.id] || 0;
+        ka.trust[kb.id] = Math.min(1, beforeA + 0.03);
+        kb.trust[ka.id] = Math.min(1, (kb.trust[ka.id] || 0) + 0.03);
+        if (beforeA < 0.5 && ka.trust[kb.id] >= 0.5) {
+          ka.u = bumpClock(w); kb.u = bumpClock(w);
+          var bondText = kithLabel(ka) + ' and ' + kithLabel(kb) + ' became fast friends.';
+          chronicle(w, 'kith', bondText);
+          events.push({ kind: 'bond', text: bondText });
+        }
+        // trim trust memories of the faintest acquaintances
+        [ka, kb].forEach(function (kk) {
+          var known = Object.keys(kk.trust);
+          if (known.length > 16) {
+            known.sort(function (a2, b2) { return kk.trust[a2] - kk.trust[b2] || (a2 < b2 ? -1 : 1); });
+            delete kk.trust[known[0]];
+          }
+        });
+        // courting: two bonded, hale, grown kith in fair weather
+        if (!storm && ka.trust[kb.id] >= 0.5 && kb.trust[ka.id] >= 0.5 &&
+            ka.energy > 0.65 && kb.energy > 0.65 &&
+            kithStage(ka, now) === 'grown' && kithStage(kb, now) === 'grown') {
+          var birth = birthChild(w, ka, kb, dayBucket);
+          if (birth) events.push(birth);
+        }
+      }
+    }
+    return events;
+  }
+
+  /* ---------- catch-up: the world lives while the file sleeps ---------- */
+
+  var CATCHUP_BUCKET_MS = 6 * 3600 * 1000;
+  var CATCHUP_MAX_BUCKETS = 12; // at most three days of remembered happenings
+
+  function catchUp(w) {
+    var now = env.now();
+    var slept = now - (w.touched || now);
+    if (slept < 2 * 3600 * 1000) return [];
+    advanceGrowth(w); // what bloomed while the file slept counts as food
+    var events = [];
+    var buckets = Math.min(CATCHUP_MAX_BUCKETS, Math.floor(slept / CATCHUP_BUCKET_MS));
+    var start = now - buckets * CATCHUP_BUCKET_MS;
+    var anyBloom = Object.keys(w.plants).some(function (id) { return w.plants[id].growth > 0.55; });
+
+    for (var i = 1; i <= buckets; i++) {
+      var t = start + i * CATCHUP_BUCKET_MS;
+      events = events.concat(checkMortality(w, t));
+      var living = livingKith(w);
+
+      living.forEach(function (k) {
+        if (anyBloom) {
+          k.energy = Math.max(k.energy, 0.7);
+          k.starving = null;
+        } else {
+          k.energy = Math.max(0, k.energy - 0.35);
+          if (k.energy <= 0 && !k.starving) k.starving = t;
+        }
+      });
+
+      // quiet lives went on: bonded grown pairs may have had children
+      if (anyBloom) {
+        var bucketDay = Math.floor(t / DAY);
+        for (var a2 = 0; a2 < living.length; a2++) {
+          for (var b2 = a2 + 1; b2 < living.length; b2++) {
+            var ka = living[a2], kb = living[b2];
+            if ((ka.trust[kb.id] || 0) >= 0.5 && (kb.trust[ka.id] || 0) >= 0.5 &&
+                kithStage(ka, t) === 'grown' && kithStage(kb, t) === 'grown') {
+              var roll = mulberry32(hash32([ka.id, kb.id].sort().join('+') + ':catch:' + bucketDay))();
+              if (roll < 0.15) {
+                var birth = birthChild(w, ka, kb, bucketDay);
+                if (birth) events.push(birth);
+              }
+            }
+          }
+        }
+      }
+
+      // only the last day's storms are worth retelling
+      if (now - t < DAY) {
+        var wx = weatherAt(w.id, t);
+        if (wx.kind === 'storm') {
+          var sid = 's' + w.id + '-' + wx.bucket;
+          if (!w.chronicle.some(function (e) { return e.id === sid; })) {
+            var textRng = mulberry32(hash32(sid));
+            chronicle(w, 'storm', pick(textRng, STORM_TEXTS).replace('{w}', w.name), sid);
+          }
+        }
+      }
+    }
+    return events;
   }
 
   /* ---------- the merge ---------- */
@@ -718,6 +1020,7 @@
     var best = null;
     Object.keys(kith || {}).sort().forEach(function (id) {
       var k = kith[id];
+      if (k.passed) return; // the dead do not lead meetings
       if (!best || k.born < best.born) best = k;
     });
     return best;
@@ -725,8 +1028,9 @@
 
   function mergeSide(w, other) {
     // A world's chosen emissary leads the meeting; a world that never chose
-    // one is represented by its eldest kith.
-    return (w.emissary && w.kith && w.kith[w.emissary]) ? w.kith[w.emissary] : eldestKith(w.kith);
+    // one (or whose emissary has passed) is represented by its eldest kith.
+    var e = w.emissary && w.kith && w.kith[w.emissary];
+    return (e && !e.passed) ? e : eldestKith(w.kith);
   }
 
   function plantLabel(p) {
@@ -751,6 +1055,12 @@
     }
     advanceGrowth(w);
     var now = env.now();
+
+    // Minds are derived from each kith's own identity, so migrating both
+    // sides before the union gives identical results in every copy.
+    if (!w.kith) w.kith = {};
+    migrateKith(w);
+    if (other.kith) migrateKith(other);
 
     var beforePlants = Object.keys(w.plants).length;
     var beforeKith = Object.keys(w.kith || {}).length;
@@ -811,12 +1121,16 @@
         var kithParents = [ourEmissary, theirEmissary].sort(function (a, b) { return a.id < b.id ? -1 : 1; });
         var childId = 'k' + sortedIds.join('') + '-' + mergeClock;
         var childGenome = crossGenomes(rng, kithParents[0].genome, kithParents[1].genome, KITH_GENE_SPEC);
+        var childSpanRng = mulberry32(hash32(childId + ':span'));
         child = {
           id: childId,
           genome: childGenome,
+          brain: crossGenomes(rng, kithParents[0].brain, kithParents[1].brain, BRAIN_SPEC),
           given: makeKithName(rng, childGenome.voice),
           name: null,
           born: now,
+          span: 14 + Math.floor(childSpanRng() * 9),
+          passed: null,
           parents: [kithParents[0].id, kithParents[1].id],
           origin: 'merge',
           bornOfMerge: {
@@ -824,6 +1138,9 @@
             parents: [kithLabel(kithParents[0]), kithLabel(kithParents[1])]
           },
           energy: 1,
+          starving: null,
+          taste: {},
+          trust: {},
           x: 0.45 + rng() * 0.1,
           y: 0.7 + rng() * 0.1,
           tx: null, ty: null,
@@ -871,17 +1188,18 @@
 
       // Population mercy: a merge can overfill the world; the newest-born
       // wanderers move on rather than crowd the field. Deterministic order.
-      var ids = Object.keys(w.kith);
-      if (ids.length > KITH_CAP) {
+      var living = livingKith(w);
+      if (living.length > KITH_CAP) {
         // BOTH sides' emissaries are protected, so each copy evicts the same
-        // wanderers and the merged worlds stay content-identical.
+        // wanderers and the merged worlds stay content-identical. Those who
+        // have passed are memory, never evicted, and never crowd the field.
         var protectedIds = {};
         if (w.emissary) protectedIds[w.emissary] = true;
         if (other.emissary) protectedIds[other.emissary] = true;
-        var surplus = ids.map(function (id) { return w.kith[id]; })
+        var surplus = living
           .filter(function (k) { return !protectedIds[k.id] && !k.bornOfMerge && !k.name; })
           .sort(function (a, b) { return b.born !== a.born ? b.born - a.born : (a.id < b.id ? -1 : 1); })
-          .slice(0, ids.length - KITH_CAP);
+          .slice(0, living.length - KITH_CAP);
         surplus.forEach(function (k) { delete w.kith[k.id]; });
         if (surplus.length > 0) {
           chronicle(w, 'kith', surplus.length + ' of the newly-arrived kith found the field crowded and wandered on to seek worlds of their own.',
@@ -961,6 +1279,11 @@
     kithTick: kithTick,
     kithStage: kithStage,
     kithLabel: kithLabel,
+    isAlive: isAlive,
+    livingKith: livingKith,
+    checkMortality: checkMortality,
+    catchUp: catchUp,
+    inbornLiking: inbornLiking,
     plantLabel: plantLabel,
     mergeWorlds: mergeWorlds,
     WATER_COOLDOWN: WATER_COOLDOWN,

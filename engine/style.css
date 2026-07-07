@@ -246,6 +246,7 @@ html, body {
 .chronicle-entry .when .btn { margin-left: 0.2rem; }
 
 .chronicle-entry.kind-storm .what { color: #9db8dd; }
+.chronicle-entry.kind-passing .what { color: var(--ink-soft); font-style: italic; }
 
 /* Toasts */
 #toast {

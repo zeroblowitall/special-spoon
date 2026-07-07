@@ -321,7 +321,122 @@ check('lakeland is wetter than drylands', lakeStats.water > dryStats.water,
   lakeStats.water.toFixed(2) + ' vs ' + dryStats.water.toFixed(2));
 check('temperament worlds are complete worlds', Object.keys(lakeland.kith).length === 3 && lakeland.chronicle.length > 0);
 
-/* ---------- 11. extractWorld round-trip ---------- */
+/* ---------- 11. minds ---------- */
+
+console.log('minds');
+const mindWorld = W.newWorld();
+const firstKith = Object.values(mindWorld.kith)[0];
+check('kith are born with a brain', firstKith.brain &&
+  ['curiosity', 'sociability', 'boldness', 'wanderlust', 'appetite', 'patience']
+    .every(t => typeof firstKith.brain[t] === 'number'));
+check('kith are born with a lifespan', firstKith.span >= 14 && firstKith.span <= 22);
+check('inborn likings are stable and bounded', (() => {
+  const l1 = W.inbornLiking(firstKith.id, 'Vravriaka');
+  const l2 = W.inbornLiking(firstKith.id, 'Vravriaka');
+  return l1 === l2 && l1 >= -1 && l1 <= 1;
+})());
+
+// pre-mind kith grow identical minds in every copy
+const oldSoul = clone(mindWorld);
+Object.values(oldSoul.kith).forEach(k => { delete k.brain; delete k.span; delete k.taste; delete k.trust; });
+const copy1 = clone(oldSoul), copy2 = clone(oldSoul);
+W.ensureKith(copy1); W.ensureKith(copy2);
+check('migrated minds are identical across copies', stable(copy1.kith) === stable(copy2.kith));
+
+/* ---------- 12. mortality: every copy records the same passing ---------- */
+
+console.log('mortality');
+const mortal = W.newWorld();
+const doomed = Object.values(mortal.kith)[0];
+const twinA = clone(mortal), twinB = clone(mortal);
+const beyond = doomed.born + (doomed.span + 1) * 24 * 3600 * 1000;
+W.checkMortality(twinA, beyond);
+W.checkMortality(twinB, beyond);
+check('the kith passed in both copies', twinA.kith[doomed.id].passed && twinB.kith[doomed.id].passed);
+check('at the identical moment', twinA.kith[doomed.id].passed === twinB.kith[doomed.id].passed);
+const dEntryA = twinA.chronicle.find(e => e.id === 'd' + doomed.id);
+const dEntryB = twinB.chronicle.find(e => e.id === 'd' + doomed.id);
+check('with the identical chronicle id', !!dEntryA && !!dEntryB && dEntryA.text === dEntryB.text);
+const reunited = clone(twinA);
+W.mergeWorlds(reunited, clone(twinB));
+check('reunited copies hold ONE passing, not two',
+  reunited.chronicle.filter(e => e.id === 'd' + doomed.id).length === 1);
+check('the dead are never resurrected by a merge', !!reunited.kith[doomed.id].passed);
+check('the dead do not lead meetings', (() => {
+  const w2 = clone(twinA);
+  w2.emissary = doomed.id; // bless the departed
+  const visitor2 = W.newWorld();
+  const res = W.mergeWorlds(w2, clone(visitor2));
+  return !res.child || res.child.parents.indexOf(doomed.id) === -1;
+})());
+
+/* ---------- 13. birth: same pair, same day, same child ---------- */
+
+console.log('birth');
+let nursery = W.newWorld();
+while (W.weatherAt(nursery.id, fakeNow + 30 * 3600 * 1000).kind === 'storm') {
+  nursery = W.newWorld(); // courting waits for fair weather — find some
+}
+hoursPass(30); // founders come of age
+const [pa, pb] = Object.values(nursery.kith);
+pa.trust[pb.id] = 0.8; pb.trust[pa.id] = 0.8;
+pa.energy = 1; pb.energy = 1;
+const nurseryTwinA = clone(nursery), nurseryTwinB = clone(nursery);
+const day = Math.floor(fakeNow / (24 * 3600 * 1000));
+// reach into both copies and let the same pair have today's child
+function forceBirth(w) {
+  const a = w.kith[pa.id], b = w.kith[pb.id];
+  a.x = b.x; a.y = b.y; // stand together
+  // run ticks until a birth event appears (trust is already bonded)
+  for (let t = 0; t < 40; t++) {
+    const evs = W.kithTick(w, 2);
+    const born = evs.find(e => e.kind === 'born');
+    if (born) return born;
+  }
+  return null;
+}
+const bornA = forceBirth(nurseryTwinA);
+const bornB = forceBirth(nurseryTwinB);
+check('children were born in both copies', !!bornA && !!bornB);
+check('and they are the same child', bornA && bornB && bornA.child.id === bornB.child.id &&
+  content(bornA.child) === content(bornB.child));
+const reunitedNursery = clone(nurseryTwinA);
+W.mergeWorlds(reunitedNursery, clone(nurseryTwinB));
+check('reunited copies hold one child, not twins',
+  Object.values(reunitedNursery.kith).filter(k => k.parents && k.parents.indexOf(pa.id) > -1).length === 1);
+check('the child inherits a crossed brain', bornA && bornA.child.brain &&
+  bornA.child.brain.curiosity >= 0.05 && bornA.child.brain.curiosity <= 1);
+
+/* ---------- 14. catch-up: the world lives while the file sleeps ---------- */
+
+console.log('catch-up');
+const sleeper = W.newWorld();
+for (let i = 0; i < 3; i++) W.plantSeed(sleeper);
+hoursPass(40);
+W.advanceGrowth(sleeper); // blooms exist
+sleeper.touched = fakeNow;
+const sleeperKith = Object.values(sleeper.kith);
+sleeperKith[0].trust[sleeperKith[1].id] = 0.9;
+sleeperKith[1].trust[sleeperKith[0].id] = 0.9;
+hoursPass(72); // three days pass
+const chronicleBefore = sleeper.chronicle.length;
+const news = W.catchUp(sleeper);
+check('catch-up runs without harm', Array.isArray(news));
+check('nobody starved while food bloomed', W.livingKith(sleeper).every(k => !k.starving));
+const starvingWorld = W.newWorld();
+starvingWorld.plants = {}; // strip even the wild growth: a truly barren world
+starvingWorld.touched = fakeNow;
+hoursPass(72);
+W.catchUp(starvingWorld);
+check('a world with no food leaves its kith starving',
+  W.livingKith(starvingWorld).some(k => k.starving) || W.livingKith(starvingWorld).length < 3);
+hoursPass(72);
+starvingWorld.touched = fakeNow - 72 * 3600 * 1000;
+W.catchUp(starvingWorld);
+check('prolonged famine takes lives', W.livingKith(starvingWorld).length < 3);
+check('famine deaths are chronicled', starvingWorld.chronicle.some(e => e.kind === 'passing'));
+
+/* ---------- 15. extractWorld round-trip ---------- */
 
 console.log('extraction');
 const json = JSON.stringify(A).replace(/</g, '\\u003c');
