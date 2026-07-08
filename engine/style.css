@@ -271,6 +271,12 @@ html, body {
 }
 .lex-word { font-family: Georgia, serif; font-style: italic; font-size: 1.05rem; color: var(--accent); }
 
+/* Weather — skies change with a breath, not a switch */
+.wx-enter { animation: wxfadein 3.5s ease both; }
+.wx-exit { animation: wxfadeout 3.5s ease both; pointer-events: none; }
+@keyframes wxfadein { from { opacity: 0; } to { opacity: 1; } }
+@keyframes wxfadeout { from { opacity: 1; } to { opacity: 0; } }
+
 /* Weather */
 .raindrop {
   stroke: rgba(195, 215, 245, 0.5);

@@ -1365,6 +1365,10 @@
     var child = makeKith(w, rng, genome, [parents[0].id, parents[1].id], w.id, childId);
     child.brain = crossGenomes(rng, parents[0].brain, parents[1].brain, BRAIN_SPEC);
     child.x = (a.x + b.x) / 2; child.y = (a.y + b.y) / 2;
+    // born somewhere its own body can be: fall back to a parent's ground
+    if (!canStandAt(makeTerrain(w.id), child, child.x, child.y)) {
+      child.x = parents[0].x; child.y = parents[0].y;
+    }
     a.energy = Math.max(0.2, a.energy - 0.3);
     b.energy = Math.max(0.2, b.energy - 0.3);
     a.u = bumpClock(w); b.u = bumpClock(w);

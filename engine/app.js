@@ -96,6 +96,7 @@
   var selected = null;   // { type: 'plant'|'kith', id: '...' } | null
   var openModal = null;  // 'merge' | 'chronicle' | 'about' | 'worlds' | 'lexicon' | 'families' | null
   var lastWxKind = null; // re-render when the weather turns
+  var wxPrev = null;     // the sky we are fading away from
   var beacon = null;     // { x, y, until } — the player's soft call; never saved
   var chronicleShowAll = false; // long histories start folded
   var lastSayings = {};         // per-kith last spoken line, for chirp timing
@@ -516,27 +517,41 @@
     }
     svgParts.push('<g id="kith-layer">' + drawAllKith() + '</g>');
 
-    // weather, painted over everything
-    var wx = W.weatherAt(state.id, vnow());
-    if (wx.kind !== lastWxKind) { lastWxKind = wx.kind; updateWeatherAudio(wx.kind); }
-    else lastWxKind = wx.kind;
-    if (wx.kind === 'rain' || wx.kind === 'storm') {
-      var drops = [];
-      var rainRng = W.mulberry32(W.hash32(state.id + ':raindrops'));
-      var dropCount = wx.kind === 'storm' ? 46 : 28;
-      for (var d = 0; d < dropCount; d++) {
-        var rx = rainRng() * 1000;
-        drops.push('<line class="raindrop" x1="' + rx.toFixed(0) + '" y1="-40" x2="' + (rx - 8).toFixed(0) +
-          '" y2="-12" style="animation-delay:-' + (rainRng() * 1.4).toFixed(2) + 's;animation-duration:' +
-          (0.9 + rainRng() * 0.6).toFixed(2) + 's"/>');
+    // weather, painted over everything — and weather that CHANGES fades:
+    // the old sky lingers a few seconds while the new one settles in
+    function weatherLayersSvg(kind, cls) {
+      var layerParts = [];
+      if (kind === 'rain' || kind === 'storm') {
+        var drops = [];
+        var rainRng = W.mulberry32(W.hash32(state.id + ':raindrops'));
+        var dropCount = kind === 'storm' ? 46 : 28;
+        for (var d = 0; d < dropCount; d++) {
+          var rx = rainRng() * 1000;
+          drops.push('<line class="raindrop" x1="' + rx.toFixed(0) + '" y1="-40" x2="' + (rx - 8).toFixed(0) +
+            '" y2="-12" style="animation-delay:-' + (rainRng() * 1.4).toFixed(2) + 's;animation-duration:' +
+            (0.9 + rainRng() * 0.6).toFixed(2) + 's"/>');
+        }
+        layerParts.push('<g class="rain-layer ' + cls + '">' + drops.join('') + '</g>');
       }
-      svgParts.push('<g class="rain-layer">' + drops.join('') + '</g>');
+      if (kind === 'mist') {
+        layerParts.push('<g class="mist-layer ' + cls + '">' +
+          '<ellipse class="mist m1" cx="300" cy="600" rx="340" ry="70"/>' +
+          '<ellipse class="mist m2" cx="700" cy="780" rx="420" ry="90"/>' +
+          '<ellipse class="mist m3" cx="480" cy="920" rx="380" ry="80"/></g>');
+      }
+      if (kind === 'storm') {
+        layerParts.push('<g class="' + cls + '" pointer-events="none">' +
+          '<rect x="-800" y="-800" width="2600" height="2600" fill="#0a0f1e" opacity="0.28"/>' +
+          '<rect class="lightning" x="-800" y="-800" width="2600" height="2600" fill="#eef4ff"/></g>');
+      }
+      return layerParts.join('');
     }
-    if (wx.kind === 'mist') {
-      svgParts.push('<g class="mist-layer">' +
-        '<ellipse class="mist m1" cx="300" cy="600" rx="340" ry="70"/>' +
-        '<ellipse class="mist m2" cx="700" cy="780" rx="420" ry="90"/>' +
-        '<ellipse class="mist m3" cx="480" cy="920" rx="380" ry="80"/></g>');
+
+    var wx = W.weatherAt(state.id, vnow());
+    if (wx.kind !== lastWxKind) {
+      if (lastWxKind !== null) wxPrev = { kind: lastWxKind, until: Date.now() + 5000 };
+      lastWxKind = wx.kind;
+      updateWeatherAudio(wx.kind);
     }
     // the season's breath over everything, very quiet
     var SEASON_TINT = { spring: ['#7ce38b', 0.04], autumn: ['#d99a6c', 0.055], winter: ['#dfe9f2', 0.085] };
@@ -544,9 +559,9 @@
     if (tint) {
       svgParts.push('<rect x="-800" y="-800" width="2600" height="2600" fill="' + tint[0] + '" opacity="' + tint[1] + '" pointer-events="none"/>');
     }
-    if (wx.kind === 'storm') {
-      svgParts.push('<rect x="-800" y="-800" width="2600" height="2600" fill="#0a0f1e" opacity="0.28" pointer-events="none"/>' +
-        '<rect class="lightning" x="-800" y="-800" width="2600" height="2600" fill="#eef4ff" pointer-events="none"/>');
+    svgParts.push(weatherLayersSvg(wx.kind, 'wx-enter'));
+    if (wxPrev && wxPrev.kind && Date.now() < wxPrev.until) {
+      svgParts.push(weatherLayersSvg(wxPrev.kind, 'wx-exit'));
     }
 
     stage.innerHTML =
@@ -720,7 +735,11 @@
     var sel = selected && selected.type === 'kith' && selected.id === k.id;
     var emissary = state.emissary === k.id;
     var rng = W.mulberry32(W.hash32(k.id + ':body'));
-    var inWater = !W.isLandAt(W.makeTerrain(state.id), k.x, k.y);
+    // off land is only SWIMMING where the realm's law says so: walkers
+    // stride the Frostmere ice and the Coralshelf seabed upright
+    var offLand = !W.isLandAt(W.makeTerrain(state.id), k.x, k.y);
+    var realmPass = (W.REALMS[W.realmOf(state.id).key] || {}).pass || 'swim';
+    var inWater = offLand && (realmPass === 'swim' || (realmPass === 'all' && W.isSwimmer(k)));
     var parts = [];
 
     /* torso geometry by form: 0 round, 1 tall, 2 long, 3 pear */
@@ -1071,7 +1090,7 @@
         : '';
       inner = '<h2>The Chronicle</h2>' + lineage +
         '<div>' + entries + '</div>' +
-        '<div class="row"><button class="btn" data-act="families">Families…</button>' +
+        '<div class="row"><button class="btn" data-act="families">The Folk…</button>' +
         '<button class="btn" data-act="close-modal">Close</button></div>';
     } else if (openModal === 'families') {
       var fam = W.familiesOf(state);
@@ -1087,7 +1106,24 @@
       var trees = fam.roots.map(function (root) {
         return '<div class="card-sub" style="margin:0.7rem 0 0.2rem">the line of ' + escapeHtml(W.kithLabel(root)) + '</div>' + branch(root.id, 0);
       }).join('');
-      inner = '<h2>Families</h2>' +
+      var censusNow = vnow();
+      var census = W.livingKith(state).sort(function (a, b) { return a.born - b.born; }).map(function (k) {
+        var kindName = W.kindOf(k.genome).name;
+        var mood = k.starving ? 'starving' : k.act === 'eat' ? 'eating' : k.act === 'shelter' ? 'sheltering' :
+          k.act === 'rest' ? 'dozing' : k.energy < 0.45 ? 'hungry' : 'about';
+        var traits = [];
+        if (state.emissary === k.id) traits.push('emissary');
+        if (W.isSwimmer(k)) traits.push('swimmer');
+        W.knowsOf(k).forEach(function (s) { traits.push({ seedkeeping: 'seed-keeper', song: 'singer', shelter: 'builder', hearth: 'hearth-keeper' }[s] || s); });
+        return '<div class="chronicle-entry"><span class="what"><strong>' + escapeHtml(W.kithLabel(k)) + '</strong> · ' +
+          escapeHtml(kindName) + ' · ' + W.kithStage(k, censusNow) + ' · ' + mood +
+          (traits.length ? '<br><span class="muted">' + escapeHtml(traits.join(', ')) + '</span>' : '') + '</span>' +
+          '<span class="when"><button class="btn small" data-kith-focus="' + k.id + '">Visit</button></span></div>';
+      }).join('');
+      inner = '<h2>The Folk</h2>' +
+        '<p class="muted">Everyone alive in this world, eldest first. Visit one and the eye of the gardener goes to it.</p>' +
+        census +
+        '<h2 style="margin-top:1.25rem">Families</h2>' +
         '<p class="muted">The bloodlines of this world, root to leaf. Children of two worlds appear in the line of each parent.</p>' +
         (trees || '<p class="muted">No families yet — children come to bonded, grown kith in fair weather. Give it time.</p>') +
         '<div class="row"><button class="btn" data-act="chronicle">← Chronicle</button>' +
@@ -1363,6 +1399,22 @@
       });
     });
 
+    stage.querySelectorAll('[data-kith-focus]').forEach(function (node) {
+      node.addEventListener('click', function () {
+        var id = node.getAttribute('data-kith-focus');
+        var k = state.kith[id];
+        if (!k) return;
+        selected = { type: 'kith', id: id };
+        openModal = null;
+        var focusPos = toScreen(k.x, k.y);
+        cam.zoom = Math.max(cam.zoom, 1.7);
+        cam.cx = focusPos.x;
+        cam.cy = focusPos.y;
+        render();
+        toast('The eye of the gardener rests on ' + W.kithLabel(k) + '.');
+      });
+    });
+
     stage.querySelectorAll('[data-whisper]').forEach(function (node) {
       node.addEventListener('click', function () {
         var concept = node.getAttribute('data-whisper');
@@ -1422,7 +1474,9 @@
 
       worldSvg.addEventListener('pointerdown', function (event) {
         camPointers[event.pointerId] = { x: event.clientX, y: event.clientY, target: event.target, moved: false };
-        try { worldSvg.setPointerCapture(event.pointerId); } catch (e) { /* fine */ }
+        // NOTE: the pointer is captured only once a drag actually begins —
+        // capturing here retargets clicks to the map and kills every
+        // creature and plant click (a real playtest found this)
         var ids = Object.keys(camPointers);
         if (ids.length === 2) {
           var a = camPointers[ids[0]], b = camPointers[ids[1]];
@@ -1446,7 +1500,10 @@
         }
         var dx = event.clientX - p.x, dy = event.clientY - p.y;
         if (!p.moved && Math.abs(dx) + Math.abs(dy) < 7) return;
-        p.moved = true;
+        if (!p.moved) {
+          p.moved = true;
+          try { worldSvg.setPointerCapture(event.pointerId); } catch (e) { /* fine */ }
+        }
         var rect = worldSvg.getBoundingClientRect();
         var scale = camWindow().w / rect.width;
         cam.cx -= dx * scale;
