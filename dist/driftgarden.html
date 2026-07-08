@@ -354,6 +354,13 @@ html, body {
 .chronicle-entry.kind-discovery .what { color: var(--good); }
 .chronicle-entry.kind-kind .what { color: var(--accent); }
 .chronicle-entry.kind-contact .what { color: var(--accent); font-weight: 600; }
+.chronicle-entry.kind-wanderer .what { color: #b8c7d1; font-style: italic; }
+
+.wanderer-ring {
+  animation: emissaryspin 20s linear infinite reverse;
+  transform-box: fill-box;
+  transform-origin: center;
+}
 
 /* Toasts */
 #toast {
@@ -395,7 +402,7 @@ html, body {
 <p><strong>On a phone?</strong> Your device probably opened this file in a built-in viewer that doesn't run JavaScript. Save the file, then open it with a real browser: in your Files app, long-press the file and choose <em>Open with → Chrome</em> (or Firefox). The world will be waiting.</p>
 </div></noscript>
 <div id="stage"></div>
-<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.17.1 */;</script>
+<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.18.0 */;</script>
 <script id="dg-world">
 /* Driftgarden — world logic.
  * Everything that is TRUE about a world lives here: genomes, growth, kith,
@@ -1066,6 +1073,149 @@ html, body {
     return { roots: roots, childrenOf: childrenOf };
   }
 
+  /* ---------- the wanderer ----------
+   * Every so often a stranger walks out of the edge of the world: a body
+   * from nowhere, a tongue no one here taught it, sometimes a craft. It
+   * stays a day and walks on. Visits derive from world identity and time,
+   * like weather — every copy of a world is visited by the same stranger
+   * at the same hour, and reunions never hold two of it. */
+
+  var WANDER_PERIOD = 14 * DAY;
+
+  function wandererDue(worldId, t) {
+    var period = Math.floor(t / WANDER_PERIOD);
+    var rng = mulberry32(hash32(worldId + ':wander:' + period));
+    if (rng() >= 0.55) return null; // a quiet fortnight
+    var start = period * WANDER_PERIOD + Math.floor(rng() * 12.5 * DAY);
+    var end = start + DAY + Math.floor(rng() * 0.25 * DAY);
+    return {
+      id: 'wnd' + hash32(worldId + ':wander:' + period).toString(16),
+      start: start,
+      end: end,
+      period: period
+    };
+  }
+
+  function spawnWanderer(w, due) {
+    var rng = mulberry32(hash32(due.id));
+    // a body from nowhere: no realm bias shapes a wanderer
+    var genome = newKithGenome(rng, null);
+    var spot = findSpot(w, 'wander:' + due.id, function (terrain2, x, y) {
+      return isLandAt(terrain2, x, y) && (x < 0.14 || x > 0.86); // the edge of the world
+    });
+    var k = {
+      id: due.id,
+      genome: genome,
+      brain: newKithBrain(rng),
+      given: makeKithName(rng, genome.voice),
+      name: null,
+      born: due.start,
+      span: 999,               // wanderers do not grow old here
+      passed: null,
+      departed: null,
+      wanderer: { start: due.start, end: due.end },
+      parents: null,
+      origin: 'elsewhere',
+      bornOfMerge: null,
+      energy: 0.9,
+      starving: null,
+      taste: {},
+      trust: {},
+      lex: {},
+      x: spot.x, y: spot.y,
+      tx: null, ty: null,
+      act: 'wander',
+      actUntil: 0,
+      facing: 1,
+      u: bumpClock(w)
+    };
+    // it arrives already carrying its own sure words — they will spread
+    ['home', 'sun', 'water', 'rain', 'mark:good', 'mark:want'].forEach(function (concept) {
+      k.lex[concept] = { word: coinWord(k, concept), s: 0.85, by: k.id };
+    });
+    k.lex[':order'] = { word: (hash32(k.id + ':order') % 2 === 0) ? 'mf' : 'cf', s: 0.8, by: k.id };
+    // one craft from far away, sometimes
+    var crafts = ['seedkeeping', 'song', 'shelter', 'hearth'];
+    if (rng() < 0.6) k.knows = [crafts[Math.floor(rng() * crafts.length)]];
+    w.kith[k.id] = k;
+    chronicle(w, 'wanderer', 'A stranger walked out of the edge of the world. It calls itself ' +
+      k.given + ', and no one here taught it the words it carries. It will not stay long.',
+      'wa' + k.id);
+    greetNewKind(w, k);
+    return k;
+  }
+
+  function departWanderer(w, k) {
+    k.departed = k.wanderer.end; // the same moment in every copy
+    k.u = bumpClock(w);
+    if (w.emissary === k.id) w.emissary = null;
+    var befriended = livingKith(w).some(function (o) { return (o.trust[k.id] || 0) >= 0.5; });
+    var giftText = '';
+    if (befriended) {
+      // first gift: its craft, to a bonded curious friend who lacks it
+      var craft = knowsOf(k)[0];
+      var pupil = craft && livingKith(w).filter(function (o) {
+        return (o.trust[k.id] || 0) >= 0.5 && o.brain.curiosity > 0.35 && knowsOf(o).indexOf(craft) === -1;
+      }).sort(function (a, b) { return a.id < b.id ? -1 : 1; })[0];
+      if (pupil) {
+        learn(w, pupil, craft);
+        giftText = ' Before it left, it taught ' + kithLabel(pupil) + ' ' + skillName(craft) + '.';
+      } else {
+        // second gift: a seed from nowhere
+        var plantId = 'wp' + k.id;
+        if (!w.plants[plantId]) {
+          var rng = mulberry32(hash32(plantId));
+          var terrain = makeTerrain(w.id);
+          var spot = isSoilAt(terrain, k.x, k.y) ? { x: k.x, y: k.y } : findSpot(w, 'wanderplant:' + k.id, isSoilAt);
+          w.plants[plantId] = {
+            id: plantId,
+            species: makeKithName(rng, k.genome.voice) + 'bloom',
+            name: null,
+            genome: {
+              form: PLANT_FORMS[Math.floor(rng() * PLANT_FORMS.length)],
+              hue: Math.floor(rng() * 360),
+              size: 0.5 + rng() * 0.4,
+              aspect: 0.7 + rng() * 0.8,
+              detail: 2 + Math.floor(rng() * 5),
+              glow: rng() < 0.5,
+              rate: 0.8 + rng() * 0.6
+            },
+            x: spot.x, y: spot.y,
+            soil: BIOMES[biomeAt(terrain, spot.x, spot.y)].fertility,
+            planted: k.wanderer.end,
+            tick: k.wanderer.end,
+            growth: 0,
+            watered: 0,
+            origin: 'elsewhere',
+            byHand: false,
+            bornOfMerge: null,
+            u: bumpClock(w)
+          };
+          giftText = ' Where it last stood, a seed from elsewhere was left in the ground.';
+        }
+      }
+    }
+    chronicle(w, 'wanderer', kithLabel(k) + ' walked on, the way wanderers do.' +
+      (giftText || (befriended ? '' : ' It left nothing but footprints and a few strange words.')),
+      'wd' + k.id);
+    return { kind: 'wanderer', text: kithLabel(k) + ' walked on.' + giftText };
+  }
+
+  // Called each tick: arrivals and departures at their appointed hours.
+  function wandererTick(w, now, events) {
+    var due = wandererDue(w.id, now);
+    if (due && now >= due.start && now <= due.end && !w.kith[due.id]) {
+      var visitor = spawnWanderer(w, due);
+      events.push({ kind: 'wanderer', text: 'A stranger has come: ' + visitor.given + '. It will not stay long.' });
+    }
+    Object.keys(w.kith).forEach(function (id) {
+      var k = w.kith[id];
+      if (k.wanderer && !k.departed && !k.passed && now > k.wanderer.end) {
+        events.push(departWanderer(w, k));
+      }
+    });
+  }
+
   var WHISPER_COOLDOWN = 20 * 3600 * 1000;
 
   function whisperWord(w, concept, rawWord) {
@@ -1678,7 +1828,7 @@ html, body {
     });
   }
 
-  function isAlive(k) { return !k.passed; }
+  function isAlive(k) { return !k.passed && !k.departed; }
 
   function livingKith(w) {
     return Object.keys(w.kith || {}).map(function (id) { return w.kith[id]; }).filter(isAlive);
@@ -1784,6 +1934,7 @@ html, body {
   function kithTick(w, dt, beacon) {
     var now = env.now();
     var events = checkMortality(w, now);
+    wandererTick(w, now, events);
     var terrain = makeTerrain(w.id);
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
     var wxNow = weatherAt(w.id, now);
@@ -2578,7 +2729,7 @@ html, body {
         if (w.emissary) protectedIds[w.emissary] = true;
         if (other.emissary) protectedIds[other.emissary] = true;
         var surplus = living
-          .filter(function (k) { return !protectedIds[k.id] && !k.bornOfMerge && !k.name; })
+          .filter(function (k) { return !protectedIds[k.id] && !k.bornOfMerge && !k.name && !k.wanderer; })
           .sort(function (a, b) { return b.born !== a.born ? b.born - a.born : (a.id < b.id ? -1 : 1); })
           .slice(0, living.length - KITH_CAP);
         surplus.forEach(function (k) { delete w.kith[k.id]; });
@@ -2694,6 +2845,8 @@ html, body {
     skillName: skillName,
     buildStructure: buildStructure,
     ensureStructures: ensureStructures,
+    wandererDue: wandererDue,
+    wandererTick: wandererTick,
     modernKithGenome: modernKithGenome,
     isSwimmer: isSwimmer,
     canStandAt: canStandAt,
@@ -3573,12 +3726,13 @@ html, body {
     var speechSvg = '<text class="kith-speech" x="' + speechShift + '" y="' + (-speechLift).toFixed(0) + '">' + saying + '</text>';
     var haloSel = sel ? '<circle cx="0" cy="-6" r="16" fill="none" stroke="#ffd166" stroke-width="2" opacity="0.9"/>' : '';
     var haloEmissary = emissary ? '<circle cx="0" cy="-6" r="13" fill="none" stroke="#ffd166" stroke-width="1" stroke-dasharray="2 3" opacity="0.85" class="emissary-ring"/>' : '';
+    var haloWanderer = k.wanderer ? '<circle cx="0" cy="-6" r="14" fill="none" stroke="#cfd8dd" stroke-width="1" stroke-dasharray="1 4" opacity="0.8" class="wanderer-ring"/>' : '';
 
     return '<g class="kith-group' + (sel ? ' selected' : '') + ' act-' + k.act + (inWater ? ' swimming' : '') + '" data-kith="' + k.id + '" ' +
       'style="transition: transform ' + (KITH_TICK_MS / 1000 + 0.2) + 's linear" ' +
       'transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')">' +
       ripple +
-      haloEmissary + haloSel +
+      haloWanderer + haloEmissary + haloSel +
       '<g class="kith-bob" style="animation-delay:-' + (W.hash32(k.id) % 3000) + 'ms">' +
       '<g class="pose">' +
       '<g transform="translate(0 ' + (inWater ? 3.5 : 0) + ') scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
@@ -3691,6 +3845,13 @@ html, body {
         (k.bornOfMerge ? '<div class="hybrid-note">✦ Was born of the meeting of ' + escapeHtml(k.bornOfMerge.worlds[0]) + ' and ' + escapeHtml(k.bornOfMerge.worlds[1]) + '.</div>' : '') +
         '<div class="row"><button class="btn" data-act="close-panel">Close</button></div></div>';
     }
+    if (k.departed) {
+      return '<div id="panel">' +
+        '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
+        '<div class="species">a wanderer, walked on</div>' +
+        '<div class="meta">it came from elsewhere, stayed a day, and left the way it came</div>' +
+        '<div class="row"><button class="btn" data-act="close-panel">Close</button></div></div>';
+    }
 
     var mood = k.starving ? 'starving' :
       k.act === 'eat' ? 'sipping nectar' :
@@ -3738,6 +3899,9 @@ html, body {
       if (k.taste[fav] > 0.25) tasteLine = 'has a taste for ' + escapeHtml(fav);
       if (k.taste[worst] < -0.35) tasteLine = (tasteLine ? tasteLine + '; ' : '') + 'can’t abide ' + escapeHtml(worst);
     }
+    var wandererNote = k.wanderer
+      ? '<div class="hybrid-note">✦ A wanderer — not of this world. It will walk on soon; whatever it carries goes with it, unless it is befriended.</div>'
+      : '';
     var mergeNote = k.bornOfMerge
       ? '<div class="hybrid-note">✦ Born at the meeting stone when <strong>' + escapeHtml(k.bornOfMerge.worlds[0]) +
         '</strong> met <strong>' + escapeHtml(k.bornOfMerge.worlds[1]) + '</strong> — child of the emissaries ' +
@@ -3757,7 +3921,7 @@ html, body {
       (bondLine ? '<div class="meta">' + bondLine + '</div>' : '') +
       (tasteLine ? '<div class="meta">' + tasteLine + '</div>' : '') +
       (skillLine ? '<div class="meta">' + skillLine + '</div>' : '') +
-      mergeNote + emissaryNote +
+      wandererNote + mergeNote + emissaryNote +
       '<div class="row">' +
       '<button class="btn" data-act="name-kith">Name…</button>' +
       (emissary ? '' : '<button class="btn" data-act="bless">Bless as emissary</button>') +

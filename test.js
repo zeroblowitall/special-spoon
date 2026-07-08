@@ -1107,6 +1107,60 @@ W.weatherTick(seasonWorld);
 const turnings = seasonWorld.chronicle.filter(e => e.id.indexOf('sn' + seasonWorld.id) === 0);
 check('the turning of the year is chronicled once', turnings.length === 1);
 
+/* ---------- 20h. the wanderer ---------- */
+
+console.log('the wanderer');
+const PERIOD = 14 * 24 * 3600 * 1000;
+check('the visit schedule is deterministic',
+  stable(W.wandererDue('wanderworld00001', fakeNow)) === stable(W.wandererDue('wanderworld00001', fakeNow)));
+let visitCount = 0;
+for (let p = 0; p < 20; p++) {
+  if (W.wandererDue('wanderworld00001', fakeNow + p * PERIOD)) visitCount++;
+}
+check('some fortnights bring a stranger, some are quiet', visitCount >= 3 && visitCount <= 18, visitCount + ' of 20');
+
+// step into a visit window and receive the stranger
+const hostWorld = W.newWorld();
+let visit = null;
+for (let p = 0; p < 30 && !visit; p++) {
+  const d = W.wandererDue(hostWorld.id, fakeNow + p * PERIOD);
+  if (d) visit = d;
+}
+check('a visit eventually comes', !!visit);
+fakeNow = visit.start + 3600 * 1000; // one hour into the visit
+const hostTwin = clone(hostWorld);
+W.kithTick(hostWorld, 2);
+W.kithTick(hostTwin, 2);
+const farcomer = hostWorld.kith[visit.id];
+check('the stranger arrives', !!farcomer && !!farcomer.wanderer);
+check('its arrival is chronicled once', hostWorld.chronicle.filter(e => e.id === 'wa' + visit.id).length === 1);
+check('it carries sure words of its own', farcomer.lex.home && farcomer.lex.home.s >= 0.8 && farcomer.lex.home.by === visit.id);
+check('the same stranger visits every copy', !!hostTwin.kith[visit.id] &&
+  content(hostTwin.kith[visit.id]) === content(farcomer));
+const strangerMerged = clone(hostWorld);
+W.mergeWorlds(strangerMerged, clone(hostTwin));
+check('reunited copies hold one stranger, not two',
+  strangerMerged.chronicle.filter(e => e.id === 'wa' + visit.id).length === 1);
+
+// befriended: it teaches before it goes
+farcomer.knows = ['song'];
+const wandFriend = Object.values(hostWorld.kith).find(k => k.id !== visit.id && !k.passed);
+wandFriend.trust[visit.id] = 0.7;
+wandFriend.brain.curiosity = 0.8;
+fakeNow = visit.end + 3600 * 1000; // the visit is over
+W.kithTick(hostWorld, 2);
+check('it walks on at its appointed hour', hostWorld.kith[visit.id].departed === visit.end);
+check('its leaving is chronicled once', hostWorld.chronicle.filter(e => e.id === 'wd' + visit.id).length === 1);
+check('the departed are not among the living', W.livingKith(hostWorld).every(k => k.id !== visit.id));
+check('a befriended stranger leaves its craft behind', W.knowsOf(wandFriend).indexOf('song') > -1);
+check('the gift is written down', hostWorld.chronicle.some(e => e.id === 'wd' + visit.id && e.text.indexOf('taught') > -1));
+
+// unbefriended: footprints only
+const coldWorld = clone(hostTwin);
+W.kithTick(coldWorld, 2);
+check('an unbefriended stranger leaves only footprints',
+  coldWorld.chronicle.some(e => e.id === 'wd' + visit.id && e.text.indexOf('footprints') > -1));
+
 /* ---------- 21. song ---------- */
 
 console.log('song');

@@ -864,12 +864,13 @@
     var speechSvg = '<text class="kith-speech" x="' + speechShift + '" y="' + (-speechLift).toFixed(0) + '">' + saying + '</text>';
     var haloSel = sel ? '<circle cx="0" cy="-6" r="16" fill="none" stroke="#ffd166" stroke-width="2" opacity="0.9"/>' : '';
     var haloEmissary = emissary ? '<circle cx="0" cy="-6" r="13" fill="none" stroke="#ffd166" stroke-width="1" stroke-dasharray="2 3" opacity="0.85" class="emissary-ring"/>' : '';
+    var haloWanderer = k.wanderer ? '<circle cx="0" cy="-6" r="14" fill="none" stroke="#cfd8dd" stroke-width="1" stroke-dasharray="1 4" opacity="0.8" class="wanderer-ring"/>' : '';
 
     return '<g class="kith-group' + (sel ? ' selected' : '') + ' act-' + k.act + (inWater ? ' swimming' : '') + '" data-kith="' + k.id + '" ' +
       'style="transition: transform ' + (KITH_TICK_MS / 1000 + 0.2) + 's linear" ' +
       'transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')">' +
       ripple +
-      haloEmissary + haloSel +
+      haloWanderer + haloEmissary + haloSel +
       '<g class="kith-bob" style="animation-delay:-' + (W.hash32(k.id) % 3000) + 'ms">' +
       '<g class="pose">' +
       '<g transform="translate(0 ' + (inWater ? 3.5 : 0) + ') scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
@@ -982,6 +983,13 @@
         (k.bornOfMerge ? '<div class="hybrid-note">✦ Was born of the meeting of ' + escapeHtml(k.bornOfMerge.worlds[0]) + ' and ' + escapeHtml(k.bornOfMerge.worlds[1]) + '.</div>' : '') +
         '<div class="row"><button class="btn" data-act="close-panel">Close</button></div></div>';
     }
+    if (k.departed) {
+      return '<div id="panel">' +
+        '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
+        '<div class="species">a wanderer, walked on</div>' +
+        '<div class="meta">it came from elsewhere, stayed a day, and left the way it came</div>' +
+        '<div class="row"><button class="btn" data-act="close-panel">Close</button></div></div>';
+    }
 
     var mood = k.starving ? 'starving' :
       k.act === 'eat' ? 'sipping nectar' :
@@ -1029,6 +1037,9 @@
       if (k.taste[fav] > 0.25) tasteLine = 'has a taste for ' + escapeHtml(fav);
       if (k.taste[worst] < -0.35) tasteLine = (tasteLine ? tasteLine + '; ' : '') + 'can’t abide ' + escapeHtml(worst);
     }
+    var wandererNote = k.wanderer
+      ? '<div class="hybrid-note">✦ A wanderer — not of this world. It will walk on soon; whatever it carries goes with it, unless it is befriended.</div>'
+      : '';
     var mergeNote = k.bornOfMerge
       ? '<div class="hybrid-note">✦ Born at the meeting stone when <strong>' + escapeHtml(k.bornOfMerge.worlds[0]) +
         '</strong> met <strong>' + escapeHtml(k.bornOfMerge.worlds[1]) + '</strong> — child of the emissaries ' +
@@ -1048,7 +1059,7 @@
       (bondLine ? '<div class="meta">' + bondLine + '</div>' : '') +
       (tasteLine ? '<div class="meta">' + tasteLine + '</div>' : '') +
       (skillLine ? '<div class="meta">' + skillLine + '</div>' : '') +
-      mergeNote + emissaryNote +
+      wandererNote + mergeNote + emissaryNote +
       '<div class="row">' +
       '<button class="btn" data-act="name-kith">Name…</button>' +
       (emissary ? '' : '<button class="btn" data-act="bless">Bless as emissary</button>') +

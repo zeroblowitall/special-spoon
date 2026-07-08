@@ -346,6 +346,13 @@ html, body {
 .chronicle-entry.kind-discovery .what { color: var(--good); }
 .chronicle-entry.kind-kind .what { color: var(--accent); }
 .chronicle-entry.kind-contact .what { color: var(--accent); font-weight: 600; }
+.chronicle-entry.kind-wanderer .what { color: #b8c7d1; font-style: italic; }
+
+.wanderer-ring {
+  animation: emissaryspin 20s linear infinite reverse;
+  transform-box: fill-box;
+  transform-origin: center;
+}
 
 /* Toasts */
 #toast {
