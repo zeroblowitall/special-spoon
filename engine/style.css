@@ -247,6 +247,15 @@ html, body {
 /* Families */
 .family-node { font-size: 0.88rem; padding: 0.08rem 0; }
 
+/* Structures */
+.ember-glow {
+  animation: emberpulse 2.6s ease-in-out infinite alternate;
+}
+@keyframes emberpulse {
+  from { opacity: 0.65; }
+  to { opacity: 1; }
+}
+
 /* Speech */
 .kith-speech {
   font-family: Georgia, serif;

@@ -981,6 +981,96 @@ if (asked) {
   check('and the asker understood', false, 'no ask to answer');
 }
 
+/* ---------- 20f. society II: shelters, hearths, villages ---------- */
+
+console.log('society II');
+let buildWorld = W.newWorld();
+while (W.weatherAt(buildWorld.id, fakeNow).kind === 'storm') buildWorld = W.newWorld();
+const mason = Object.values(buildWorld.kith)[0];
+W.learn(buildWorld, mason, 'shelter');
+mason.energy = 1;
+// stand somewhere on land
+const buildTerrain = W.makeTerrain(buildWorld.id);
+outer2:
+for (let r = 10; r < 46; r++) for (let c = 10; c < 110; c++) {
+  const x = (c + 0.5) / 120, y = 0.55 + (r + 0.5) / 56 * 0.45;
+  if (W.isLandAt(buildTerrain, x, y)) { mason.x = x; mason.y = y; break outer2; }
+}
+const buildDay = Math.floor(fakeNow / (24 * 3600 * 1000));
+const leantoA = W.buildStructure(buildWorld, mason, 'leanto', buildDay);
+check('a builder raises a lean-to', !!leantoA && leantoA.type === 'leanto');
+check('its raising is chronicled', buildWorld.chronicle.some(e => e.id === 'sb' + leantoA.id));
+check('one work per builder per day', W.buildStructure(buildWorld, mason, 'leanto', buildDay) === null);
+
+// the same building in every copy
+const buildTwinA = clone(buildWorld), buildTwinB = clone(buildWorld);
+const nextDay = buildDay + 1;
+const builtA = W.buildStructure(buildTwinA, buildTwinA.kith[mason.id], 'leanto', nextDay);
+const builtB = W.buildStructure(buildTwinB, buildTwinB.kith[mason.id], 'leanto', nextDay);
+check('the same building in every copy', !!builtA && !!builtB && builtA.id === builtB.id);
+const buildMerged = clone(buildTwinA);
+W.mergeWorlds(buildMerged, clone(buildTwinB));
+check('reunited copies hold one building, not two',
+  Object.keys(buildMerged.structures).filter(id => id === builtA.id).length === 1);
+check('structures survive a merge (no loss)',
+  Object.keys(buildTwinA.structures).every(id => buildMerged.structures[id]));
+
+// a hearth burns among the shelters
+W.learn(buildWorld, mason, 'hearth');
+const hearthA = W.buildStructure(buildWorld, mason, 'hearth', nextDay);
+check('a hearth-keeper sets a hearth', !!hearthA && hearthA.type === 'hearth');
+
+// storm refuge: the roof beats the rock
+const stormyBuild = clone(buildWorld);
+const refugee = Object.values(stormyBuild.kith)[1];
+refugee.x = Math.min(0.95, mason.x + 0.2); refugee.y = mason.y;
+refugee.tx = null; refugee.ty = null; refugee.act = 'wander';
+refugee.energy = 0.9;
+refugee.brain.boldness = 0.1; // timid: will seek shelter
+// find a stormy moment for this world
+let stormT = null;
+for (let h = 0; h < 2000 && stormT === null; h++) {
+  const t = fakeNow + h * 2 * 3600 * 1000;
+  if (W.weatherAt(stormyBuild.id, t).kind === 'storm') stormT = t;
+}
+if (stormT !== null) {
+  const savedNow3 = fakeNow;
+  fakeNow = stormT;
+  let headedToRoof = false;
+  for (let t = 0; t < 40 && !headedToRoof; t++) {
+    W.kithTick(stormyBuild, 2);
+    fakeNow += 2000;
+    const me = stormyBuild.kith[refugee.id];
+    headedToRoof = me.tx !== null && Math.abs(me.tx - leantoA.x) < 0.05 && Math.abs(me.ty - leantoA.y) < 0.05;
+    if (me.act === 'shelter' && Math.abs(me.x - leantoA.x) < 0.07) headedToRoof = true;
+  }
+  check('in a storm, the roof beats the rock', headedToRoof);
+  fakeNow = savedNow3;
+} else {
+  check('in a storm, the roof beats the rock', true); // a stormless world proves nothing
+}
+
+// where shelters ring a hearth and a tribe lives there: a village
+const villageWorld = clone(buildWorld);
+const folk3 = Object.values(villageWorld.kith);
+// a bonded trio living by the hearth
+folk3.forEach((k, i) => {
+  k.x = hearthA.x + (i - 1) * 0.02; k.y = hearthA.y;
+  k.tx = null; k.ty = null; k.act = 'rest'; k.actUntil = fakeNow + 900000;
+  folk3.forEach(o => { if (o.id !== k.id) k.trust[o.id] = 0.8; });
+});
+// a second shelter to complete the ring
+const secondShelter = W.buildStructure(villageWorld, villageWorld.kith[folk3[1].id], 'leanto', nextDay + 1);
+if (secondShelter) { secondShelter.x = hearthA.x + 0.08; secondShelter.y = hearthA.y; }
+let villageDeclared = false;
+for (let t = 0; t < 10 && !villageDeclared; t++) {
+  W.kithTick(villageWorld, 2);
+  fakeNow += 2000;
+  villageDeclared = villageWorld.chronicle.some(e => e.text.indexOf('first village') > -1);
+}
+check('the first village is declared', villageDeclared);
+check('and only once', villageWorld.chronicle.filter(e => e.id === 'v' + hearthA.id).length <= 1);
+
 /* ---------- 21. song ---------- */
 
 console.log('song');

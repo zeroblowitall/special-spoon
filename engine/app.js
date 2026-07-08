@@ -480,6 +480,9 @@
     }
 
     plants.forEach(function (p) { svgParts.push(drawPlant(p)); });
+    var structures = Object.keys(state.structures || {}).map(function (id) { return state.structures[id]; });
+    structures.sort(function (a, b) { return a.y - b.y; });
+    structures.forEach(function (s) { svgParts.push(drawStructure(s)); });
     if (beacon && Date.now() < beacon.until) {
       var bpos = toScreen(beacon.x, beacon.y);
       svgParts.push('<g class="beckon" transform="translate(' + bpos.x.toFixed(1) + ' ' + bpos.y.toFixed(1) + ')">' +
@@ -633,6 +636,34 @@
       '<ellipse cx="0" cy="1.5" rx="' + (9 * s).toFixed(1) + '" ry="2.6" fill="rgba(0,0,0,0.22)"/>' + halo +
       '<g class="sway" style="animation-delay:-' + (W.hash32(p.id) % 6000) + 'ms">' + parts.join('') + '</g>' +
       labelSvg + '</g>';
+  }
+
+  /* ---------- structures: what society raises ---------- */
+
+  function drawStructure(s) {
+    var pos = toScreen(s.x, s.y);
+    var scale = 0.85 + (s.y - 0.55) * 0.9;
+    var parts = [];
+    if (s.type === 'leanto') {
+      // two leaning walls, a dark doorway, a straw ridge
+      parts.push('<ellipse cx="0" cy="1.5" rx="11" ry="3" fill="rgba(0,0,0,0.22)"/>');
+      parts.push('<path d="M-10 0 L0 -13 L10 0 Z" fill="#6b5941"/>');
+      parts.push('<path d="M-10 0 L0 -13 L-2.5 0 Z" fill="#57482f"/>');
+      parts.push('<path d="M-3.5 0 L0 -6 L3.5 0 Z" fill="#241d12"/>');
+      parts.push('<path d="M-10.5 0.5 L0 -13.6 L10.5 0.5" stroke="#8a7350" stroke-width="1.4" fill="none" stroke-linecap="round"/>');
+    } else {
+      // a ring of stones and a live ember
+      parts.push('<ellipse cx="0" cy="1" rx="9" ry="3" fill="rgba(0,0,0,0.2)"/>');
+      for (var i = 0; i < 6; i++) {
+        var a = (i / 6) * Math.PI * 2;
+        parts.push('<ellipse cx="' + (Math.cos(a) * 6).toFixed(1) + '" cy="' + (Math.sin(a) * 2.6 - 1).toFixed(1) +
+          '" rx="2.1" ry="1.6" fill="' + (i % 2 ? '#6e6a62' : '#5a564e') + '"/>');
+      }
+      parts.push('<circle class="ember-glow" cx="0" cy="-1.4" r="2.4" fill="#e8873a"/>');
+      parts.push('<circle cx="0" cy="-1.6" r="1.1" fill="#ffd166"/>');
+    }
+    return '<g class="structure" transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) +
+      ') scale(' + scale.toFixed(2) + ')">' + parts.join('') + '</g>';
   }
 
   /* ---------- kith ---------- */
@@ -934,6 +965,8 @@
     if (W.isSwimmer(k)) skills.push('a swimmer: at home in the water');
     if (W.knowsOf(k).indexOf('seedkeeping') > -1) skills.push('a seed-keeper: it gardens');
     if (W.knowsOf(k).indexOf('song') > -1) skills.push('a singer: it sings against the storms');
+    if (W.knowsOf(k).indexOf('shelter') > -1) skills.push('a builder: it raises shelters');
+    if (W.knowsOf(k).indexOf('hearth') > -1) skills.push('a hearth-keeper: warmth follows it');
     var skillLine = skills.length ? skills.join(' · ') : null;
     var tastes = Object.keys(k.taste || {});
     var tasteLine = null;

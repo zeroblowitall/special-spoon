@@ -503,8 +503,52 @@
 
   var SKILL_NAMES = {
     seedkeeping: 'the way of seed-keeping',
-    song: 'the song'
+    song: 'the song',
+    shelter: 'the craft of shelter',
+    hearth: 'the keeping of hearths'
   };
+
+  /* ---------- structures: what society raises ----------
+   * Nobody clicks "build". A discovery, a skilled kith, a day's work —
+   * and the world gains a lean-to, then a hearth, then, where a tribe
+   * lives among its shelters, a village. Structures are world content
+   * with deterministic identities per (builder, day), so drifted copies
+   * raise the same buildings and merges never duplicate a town. */
+
+  var STRUCT_CAP = 14;
+
+  function ensureStructures(w) {
+    if (!w.structures) w.structures = {};
+    return w.structures;
+  }
+
+  function structDist(s, x, y) {
+    return Math.sqrt((s.x - x) * (s.x - x) + (s.y - y) * (s.y - y));
+  }
+
+  function buildStructure(w, k, type, dayBucket) {
+    ensureStructures(w);
+    var sid = (type === 'hearth' ? 'h' : 'st') + hash32(k.id + ':build:' + type + ':' + dayBucket).toString(16);
+    if (w.structures[sid]) return null; // today's work is already done
+    if (Object.keys(w.structures).length >= STRUCT_CAP) return null;
+    var terrain = makeTerrain(w.id);
+    if (!isLandAt(terrain, k.x, k.y)) return null;
+    var s = {
+      id: sid,
+      type: type,
+      x: k.x, y: k.y,
+      by: k.id,
+      built: env.now(),
+      u: bumpClock(w)
+    };
+    w.structures[sid] = s;
+    var whereName = realmBiome(w.id, biomeAt(terrain, k.x, k.y));
+    chronicle(w, 'discovery', type === 'hearth'
+      ? kithLabel(k) + ' set stones in a ring by the shelters and kept something warm alive in it. A hearth burns in the ' + whereName + '.'
+      : kithLabel(k) + ' raised a lean-to in the ' + whereName + '. The weather will have to try harder now.',
+      'sb' + sid);
+    return s;
+  }
 
   function skillName(skill) { return SKILL_NAMES[skill] || skill; }
 
@@ -875,6 +919,14 @@
         k.x = spot.x; k.y = spot.y; k.tx = null; k.ty = null;
       }
     });
+    Object.keys(w.structures || {}).forEach(function (id) {
+      var s = w.structures[id];
+      // buildings that arrive over water are rebuilt on the nearest ground
+      if (!isLandAt(terrain, s.x, s.y)) {
+        var spot = findSpot(w, 'struct:' + id, isLandAt);
+        s.x = spot.x; s.y = spot.y;
+      }
+    });
   }
 
   /* ---------- weather: identity + time, no stored state ----------
@@ -1016,6 +1068,7 @@
     if (!w.kith) { w.kith = {}; w.emissary = null; }
     if (Object.keys(w.kith).length === 0) spawnFounderKith(w);
     migrateKith(w);
+    ensureStructures(w); // worlds from before building get an empty commons
   }
 
   /* ---------- plants ---------- */
@@ -1285,8 +1338,14 @@
       .filter(function (p) { return p.growth > 0.55; });
     var dayBucket = Math.floor(now / DAY);
 
+    var structList = Object.keys(w.structures || {}).map(function (id) { return w.structures[id]; });
+
     alive.forEach(function (k) {
-      var decay = ENERGY_DECAY_PER_SEC * (storm && k.act !== 'shelter' ? 1.5 : 1) * dt;
+      var decayMul = storm && k.act !== 'shelter' ? 1.5 : 1;
+      if (k.act === 'shelter' && structList.some(function (s) {
+        return s.type === 'leanto' && structDist(s, k.x, k.y) < 0.07;
+      })) decayMul = 0.6; // a roof is worth more than a rock
+      var decay = ENERGY_DECAY_PER_SEC * decayMul * dt;
       k.energy = Math.max(0, k.energy - decay);
       if (k.energy <= 0 && !k.starving) k.starving = now;
 
@@ -1349,6 +1408,16 @@
             chronicle(w, 'discovery', songText, 'ds' + k.id);
             events.push({ kind: 'discovery', text: songText });
           }
+          // a different mind, in the same weather, invents the roof
+          if (knowsOf(k).indexOf('shelter') === -1 &&
+              k.brain.curiosity > 0.6 && k.brain.boldness > 0.55 && rng() < 0.06) {
+            learn(w, k, 'shelter');
+            var shelterText = 'Soaked and stubborn, ' + kithLabel(k) +
+              ' piled fallen stems against the stone — and the rain came no further. ' +
+              'It has learned the craft of shelter.';
+            chronicle(w, 'discovery', shelterText, 'db' + k.id);
+            events.push({ kind: 'discovery', text: shelterText });
+          }
           return; // the singing itself happens in the song pass, last of all
         }
         else return;
@@ -1363,9 +1432,16 @@
       var restUrge = brain.patience * 0.3 * rng();
 
       if (stormUrge > hungerUrge && stormUrge > 0.5) {
-        // make for high ground (rock shrugs off weather) or hunker down
+        // a lean-to first, if one stands near; else high ground; else hunker
         var refuge = null;
-        for (var st = 0; st < 10; st++) {
+        var bestLeanto = null, bestLeantoD = 0.35;
+        structList.forEach(function (s) {
+          if (s.type !== 'leanto') return;
+          var sd = structDist(s, k.x, k.y);
+          if (sd < bestLeantoD) { bestLeantoD = sd; bestLeanto = s; }
+        });
+        if (bestLeanto) refuge = { x: bestLeanto.x, y: bestLeanto.y };
+        for (var st = 0; st < 10 && !refuge; st++) {
           var sx = Math.max(0.03, Math.min(0.97, k.x + (rng() - 0.5) * 0.3));
           var sy = Math.max(0.56, Math.min(0.97, k.y + (rng() - 0.5) * 0.3));
           var sb = biomeAt(terrain, sx, sy);
@@ -1504,10 +1580,14 @@
         if (ka.passed || kb.passed) continue;
         var ed = Math.sqrt((ka.x - kb.x) * (ka.x - kb.x) + (ka.y - kb.y) * (ka.y - kb.y));
         if (ed >= 0.05) continue;
-        // together: trust grows (slow drift, not clocked)
+        // together: trust grows (slow drift, not clocked) — and grows
+        // warmer by a hearth
+        var warmth = structList.some(function (s) {
+          return s.type === 'hearth' && structDist(s, ka.x, ka.y) < 0.08;
+        }) ? 0.05 : 0.03;
         var beforeA = ka.trust[kb.id] || 0;
-        ka.trust[kb.id] = Math.min(1, beforeA + 0.03);
-        kb.trust[ka.id] = Math.min(1, (kb.trust[ka.id] || 0) + 0.03);
+        ka.trust[kb.id] = Math.min(1, beforeA + warmth);
+        kb.trust[ka.id] = Math.min(1, (kb.trust[ka.id] || 0) + warmth);
         if (beforeA < 0.5 && ka.trust[kb.id] >= 0.5) {
           ka.u = bumpClock(w); kb.u = bumpClock(w);
           var bondText = kithLabel(ka) + ' and ' + kithLabel(kb) + ' became fast friends.';
@@ -1659,6 +1739,67 @@
       if (knowsOf(k).indexOf('seedkeeping') > -1 && k.energy > 0.5 && rng() < 0.06) {
         keeperPlant(w, k, dayBucket);
       }
+    });
+
+    /* -- builders build: a lean-to where none stands, a hearth among
+     * shelters. One work per builder per day, identical in every copy -- */
+    alive.forEach(function (k) {
+      if (k.energy < 0.6) return;
+      var skills = knowsOf(k);
+      if (skills.indexOf('shelter') > -1 && rng() < 0.05) {
+        var crowded = structList.some(function (s) { return structDist(s, k.x, k.y) < 0.12; });
+        if (!crowded) {
+          var builtLeanto = buildStructure(w, k, 'leanto', dayBucket);
+          if (builtLeanto) {
+            structList.push(builtLeanto);
+            events.push({ kind: 'discovery', text: kithLabel(k) + ' raised a lean-to.' });
+          }
+        }
+      }
+      // hearth-keeping is invented at night, beside one's own shelter
+      var nearLeanto = structList.some(function (s) {
+        return s.type === 'leanto' && structDist(s, k.x, k.y) < 0.1;
+      });
+      if (nearLeanto && skills.indexOf('shelter') > -1 && skills.indexOf('hearth') === -1 &&
+          k.brain.sociability > 0.65 && rng() < 0.04) {
+        learn(w, k, 'hearth');
+        var hearthText = 'By the shelters in the dark, ' + kithLabel(k) +
+          ' learned to keep something warm alive. It knows the keeping of hearths.';
+        chronicle(w, 'discovery', hearthText, 'dh' + k.id);
+        events.push({ kind: 'discovery', text: hearthText });
+      }
+      if (nearLeanto && skills.indexOf('hearth') > -1 && rng() < 0.05) {
+        var hearthNear = structList.some(function (s) {
+          return s.type === 'hearth' && structDist(s, k.x, k.y) < 0.15;
+        });
+        if (!hearthNear) {
+          var builtHearth = buildStructure(w, k, 'hearth', dayBucket);
+          if (builtHearth) {
+            structList.push(builtHearth);
+            events.push({ kind: 'discovery', text: kithLabel(k) + ' set a hearth by the shelters.' });
+          }
+        }
+      }
+    });
+
+    /* -- where shelters ring a hearth and a tribe lives among them,
+     * that is a village — declared once, identically in every copy -- */
+    structList.forEach(function (hearth) {
+      if (hearth.type !== 'hearth') return;
+      var villageId = 'v' + hearth.id;
+      if (w.chronicle.some(function (e) { return e.id === villageId; })) return;
+      var ring = structList.filter(function (s) {
+        return s.id !== hearth.id && structDist(s, hearth.x, hearth.y) < 0.15;
+      });
+      if (ring.length < 2) return;
+      var tribeHere = tribesOf(w).filter(function (tribe) {
+        return tribe.members.some(function (m) { return structDist(hearth, m.x, m.y) < 0.2; });
+      })[0];
+      if (!tribeHere) return;
+      var villageText = 'Around the hearth, ' + (ring.length) + ' shelters stand together, and the ' +
+        tribeHere.name + ' live among them. This world has its first village.';
+      chronicle(w, 'kind', villageText, villageId);
+      events.push({ kind: 'village', text: villageText });
     });
 
     /* -- three or more mutual bonds are the birth of a tribe, chronicled
@@ -1823,6 +1964,8 @@
     unionByU(w.plants, other.plants, w.id, other.id);
     if (!w.kith) w.kith = {};
     unionByU(w.kith, other.kith || {}, w.id, other.id);
+    ensureStructures(w);
+    unionByU(w.structures, other.structures || {}, w.id, other.id);
 
     var seen = {};
     w.chronicle.forEach(function (e) { seen[e.id] = true; });
@@ -2089,6 +2232,8 @@
     kindOf: kindOf,
     greetNewKind: greetNewKind,
     skillName: skillName,
+    buildStructure: buildStructure,
+    ensureStructures: ensureStructures,
     modernKithGenome: modernKithGenome,
     isSwimmer: isSwimmer,
     canStandAt: canStandAt,
