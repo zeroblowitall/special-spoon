@@ -715,8 +715,9 @@ for (let i = 0; i < 200; i++) {
 check('crossed genes stay in range', check.lastInRange !== false);
 check('mutation eventually reshapes a body (a fin found, a tail lost)', sawStep);
 
-// swimmers: the lakes are open
-const lakeWorld = W.newWorld();
+// swimmers: the lakes are open (in realms whose law is 'swim')
+let lakeWorld = W.newWorld();
+while (W.REALMS[W.realmOf(lakeWorld.id).key].pass !== 'swim') lakeWorld = W.newWorld();
 const lakeTerrain = W.makeTerrain(lakeWorld.id);
 let wetSpot = null;
 for (let r = 0; r < 56 && !wetSpot; r++) {
@@ -1070,6 +1071,41 @@ for (let t = 0; t < 10 && !villageDeclared; t++) {
 }
 check('the first village is declared', villageDeclared);
 check('and only once', villageWorld.chronicle.filter(e => e.id === 'v' + hearthA.id).length <= 1);
+
+/* ---------- 20g. seasons ---------- */
+
+console.log('seasons');
+check('the season is a pure function of time', W.seasonAt(fakeNow).key === W.seasonAt(fakeNow).key &&
+  ['spring', 'summer', 'autumn', 'winter'].indexOf(W.seasonAt(fakeNow).key) > -1);
+const WEEK = 7 * 24 * 3600 * 1000;
+check('the year turns in order', (function () {
+  const i0 = W.seasonAt(fakeNow).index;
+  const order = [0, 1, 2, 3].map(i => W.seasonAt((i0 + i) * WEEK + 1).key).join(',');
+  const ring = 'spring,summer,autumn,winter,spring,summer,autumn,winter';
+  return ring.indexOf(order) > -1;
+})());
+// the crucial law: growth is identical no matter how often you sample it
+const tA = fakeNow, tB = fakeNow + 10 * 24 * 3600 * 1000; // spans season boundaries
+const mid = fakeNow + 4.3 * 24 * 3600 * 1000;
+check('growing-hours are sampling-invariant across boundaries',
+  Math.abs(W.growingHours(tA, tB) - (W.growingHours(tA, mid) + W.growingHours(mid, tB))) < 1e-6);
+check('winter is lean, spring is eager', (function () {
+  // find a winter week and a spring week and compare their yield
+  let winterStart = null, springStart = null;
+  for (let i = 0; i < 8; i++) {
+    const t = (W.seasonAt(fakeNow).index + i) * WEEK;
+    if (W.seasonAt(t + 1).key === 'winter') winterStart = t;
+    if (W.seasonAt(t + 1).key === 'spring') springStart = t;
+  }
+  return W.growingHours(winterStart, winterStart + WEEK) < W.growingHours(springStart, springStart + WEEK);
+})());
+// the turning of the year is chronicled once
+const seasonWorld = W.newWorld();
+hoursPass(24 * 8); // at least one boundary passes
+W.weatherTick(seasonWorld);
+W.weatherTick(seasonWorld);
+const turnings = seasonWorld.chronicle.filter(e => e.id.indexOf('sn' + seasonWorld.id) === 0);
+check('the turning of the year is chronicled once', turnings.length === 1);
 
 /* ---------- 21. song ---------- */
 

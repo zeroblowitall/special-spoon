@@ -10,12 +10,30 @@
   var STORE_PREFIX = 'driftgarden.';
   var KITH_TICK_MS = 2000;
 
+  /* ---------- the timewarp (a maker's tool, not a player's) ----------
+   * Append ?warp=1000 to the URL and the whole world — growth, weather,
+   * seasons, ageing, births, deaths — runs that many times faster. The
+   * simulation is sub-stepped so behaviour stays sane. Nothing persists;
+   * remove the parameter and time walks again. */
+
+  var WARP = (function () {
+    try {
+      var m = (location.search + ' ' + location.hash).match(/warp=(\d+(?:\.\d+)?)/);
+      return m ? Math.max(1, Math.min(5000, parseFloat(m[1]))) : 1;
+    } catch (e) { return 1; }
+  })();
+  var WARP_BASE = Date.now();
+  function vnow() {
+    return WARP === 1 ? Date.now() : WARP_BASE + (Date.now() - WARP_BASE) * WARP;
+  }
+  if (WARP > 1) W.setEnv({ now: vnow });
+
   /* ---------- persistence & boot ---------- */
 
   var state = null;
 
   function save() {
-    state.touched = Date.now();
+    state.touched = vnow();
     try {
       localStorage.setItem(STORE_PREFIX + state.id, JSON.stringify(state));
     } catch (e) { /* private mode etc. — the Preserve button still works */ }
@@ -371,7 +389,7 @@
     var terrain = W.makeTerrain(worldId);
     var paint = REALM_PAINT[W.realmOf(worldId).key] || REALM_PAINT.meadow;
     var canvas = document.createElement('canvas');
-    var CW = 600, CH = 320;
+    var CW = 840, CH = 448;
     canvas.width = CW; canvas.height = CH;
     var ctx = canvas.getContext('2d');
     var img = ctx.createImageData(CW, CH);
@@ -379,10 +397,18 @@
     var ySpan = 530 / 1200;
     var baseSeed = W.hash32(worldId);
 
-    function cellAt(wx, wy) {
-      return terrain.heights[
-        Math.max(0, Math.min(terrain.rows - 1, Math.floor((wy - 0.55) / 0.45 * terrain.rows)))][
-        Math.max(0, Math.min(terrain.cols - 1, Math.floor(wx * terrain.cols)))];
+    // Smoothly interpolated height for LIGHT (kills the banding lines);
+    // biome classification stays cell-based so the sim and the picture
+    // never disagree about what a place is.
+    function heightSmooth(wx, wy) {
+      var gx = Math.max(0, Math.min(terrain.cols - 1.001, wx * terrain.cols - 0.5));
+      var gy = Math.max(0, Math.min(terrain.rows - 1.001, (wy - 0.55) / 0.45 * terrain.rows - 0.5));
+      var x0 = Math.floor(gx), y0 = Math.floor(gy);
+      var fx = gx - x0, fy = gy - y0;
+      var h = terrain.heights;
+      var x1 = Math.min(terrain.cols - 1, x0 + 1), y1 = Math.min(terrain.rows - 1, y0 + 1);
+      return h[y0][x0] * (1 - fx) * (1 - fy) + h[y0][x1] * fx * (1 - fy) +
+             h[y1][x0] * (1 - fx) * fy + h[y1][x1] * fx * fy;
     }
 
     for (var py = 0; py < CH; py++) {
@@ -391,7 +417,7 @@
         var wx = px / CW;
         var biome = W.biomeAt(terrain, wx, wy);
         var base = paint[biome];
-        var cell = cellAt(wx, wy);
+        var cell = heightSmooth(wx, wy);
         var r = base[0], g = base[1], b = base[2];
 
         if (biome === 'deep' || biome === 'shallows') {
@@ -401,8 +427,8 @@
           if (biome === 'shallows') { g += 8; b += 6; }
         } else {
           // relief: slopes facing the light (from the top of the map) glow;
-          // slopes falling away shade — the flat world gains its 3rd dimension
-          var north = cellAt(wx, Math.max(0.551, wy - 0.012));
+          // slopes falling away shade — smooth heights, no more banding
+          var north = heightSmooth(wx, Math.max(0.551, wy - 0.01));
           var slope = (cell - north) * 260;
           r += slope; g += slope; b += slope;
           var lift = (cell - 0.5) * 26;
@@ -483,7 +509,7 @@
     var structures = Object.keys(state.structures || {}).map(function (id) { return state.structures[id]; });
     structures.sort(function (a, b) { return a.y - b.y; });
     structures.forEach(function (s) { svgParts.push(drawStructure(s)); });
-    if (beacon && Date.now() < beacon.until) {
+    if (beacon && vnow() < beacon.until) {
       var bpos = toScreen(beacon.x, beacon.y);
       svgParts.push('<g class="beckon" transform="translate(' + bpos.x.toFixed(1) + ' ' + bpos.y.toFixed(1) + ')">' +
         '<circle class="beckon-ripple" r="6"/><circle class="beckon-ripple r2" r="6"/></g>');
@@ -491,7 +517,7 @@
     svgParts.push('<g id="kith-layer">' + drawAllKith() + '</g>');
 
     // weather, painted over everything
-    var wx = W.weatherAt(state.id, Date.now());
+    var wx = W.weatherAt(state.id, vnow());
     if (wx.kind !== lastWxKind) { lastWxKind = wx.kind; updateWeatherAudio(wx.kind); }
     else lastWxKind = wx.kind;
     if (wx.kind === 'rain' || wx.kind === 'storm') {
@@ -511,6 +537,12 @@
         '<ellipse class="mist m1" cx="300" cy="600" rx="340" ry="70"/>' +
         '<ellipse class="mist m2" cx="700" cy="780" rx="420" ry="90"/>' +
         '<ellipse class="mist m3" cx="480" cy="920" rx="380" ry="80"/></g>');
+    }
+    // the season's breath over everything, very quiet
+    var SEASON_TINT = { spring: ['#7ce38b', 0.04], autumn: ['#d99a6c', 0.055], winter: ['#dfe9f2', 0.085] };
+    var tint = SEASON_TINT[wx.season];
+    if (tint) {
+      svgParts.push('<rect x="-800" y="-800" width="2600" height="2600" fill="' + tint[0] + '" opacity="' + tint[1] + '" pointer-events="none"/>');
     }
     if (wx.kind === 'storm') {
       svgParts.push('<rect x="-800" y="-800" width="2600" height="2600" fill="#0a0f1e" opacity="0.28" pointer-events="none"/>' +
@@ -669,7 +701,7 @@
   /* ---------- kith ---------- */
 
   function drawAllKith() {
-    var now = Date.now();
+    var now = vnow();
     return W.livingKith(state)
       .sort(function (a, b) { return a.y - b.y; })
       .map(function (k) { return drawKith(k, now); })
@@ -832,7 +864,7 @@
     if (!layer) return;
     var living = W.livingKith(state);
     var missing = false;
-    var now = Date.now();
+    var now = vnow();
     living.forEach(function (k) {
       var node = layer.querySelector('[data-kith="' + k.id + '"]');
       if (!node) { missing = true; return; }
@@ -863,9 +895,11 @@
 
   function topbarHTML() {
     var notes = [];
+    if (WARP > 1) notes.push('⚡×' + WARP);
+    notes.push(W.seasonAt(vnow()).key);
     if (state.lineage.length > 0) notes.push('woven from ' + (state.lineage.length + 1) + ' worlds');
     if (lastWxKind && lastWxKind !== 'clear' && WX_VERBS[lastWxKind]) {
-      var wxNow = W.weatherAt(state.id, Date.now());
+      var wxNow = W.weatherAt(state.id, vnow());
       notes.push(wxNow.label + WX_VERBS[lastWxKind]);
     }
     var gen = notes.length ? ' <span class="gen">· ' + notes.join(' · ') + '</span>' : '';
@@ -891,10 +925,10 @@
   }
 
   function plantPanelHTML(p) {
-    var age = Math.max(1, Math.round((Date.now() - p.planted) / 3600000));
+    var age = Math.max(1, Math.round((vnow() - p.planted) / 3600000));
     var ageText = age < 48 ? age + 'h old' : Math.round(age / 24) + ' days old';
     var stageText = p.growth >= 1 ? 'in full bloom' : p.growth > 0.55 ? 'blooming' : p.growth > 0.2 ? 'growing' : 'a seedling';
-    var canWater = !p.watered || Date.now() - p.watered >= W.WATER_COOLDOWN;
+    var canWater = !p.watered || vnow() - p.watered >= W.WATER_COOLDOWN;
     var hybridNote = p.bornOfMerge
       ? '<div class="hybrid-note">✦ Born when <strong>' + escapeHtml(p.bornOfMerge.worlds[0]) + '</strong> met <strong>' +
         escapeHtml(p.bornOfMerge.worlds[1]) + '</strong> — child of ' + escapeHtml(p.bornOfMerge.parents[0]) +
@@ -916,7 +950,7 @@
   }
 
   function kithPanelHTML(k) {
-    var now = Date.now();
+    var now = vnow();
     var stage = W.kithStage(k, now);
     var days = Math.floor((now - k.born) / 86400000);
     var ageText = days < 1 ? 'born today' : days + (days === 1 ? ' day' : ' days') + ' old';
@@ -1078,7 +1112,7 @@
           example + '.</p>';
       }
       var canWhisper = state.emissary && state.kith[state.emissary] && !state.kith[state.emissary].passed &&
-        (!state.whispered || Date.now() - state.whispered > 20 * 3600 * 1000);
+        (!state.whispered || vnow() - state.whispered > 20 * 3600 * 1000);
       var lexRows = concepts.map(function (concept) {
         var words = tongue[concept];
         var coiner = words[0].by === 'whisper' ? 'carried on the wind'
@@ -1204,7 +1238,7 @@
   function preserveWorld() {
     W.advanceGrowth(state);
     W.chronicle(state, 'preserve', 'The world was preserved and set free as a file.');
-    state.lastPreserve = Date.now();
+    state.lastPreserve = vnow();
     save();
     var blob = new Blob([selfHTML()], { type: 'text/html' });
     var a = document.createElement('a');
@@ -1437,7 +1471,7 @@
         var wy = 0.55 + (scenePoint.y - 470) / 1200;
         if (wx < 0.02 || wx > 0.98 || wy < 0.555 || wy > 0.99) return; // the sky does not listen
         if (!W.isLandAt(W.makeTerrain(state.id), wx, wy)) { toast('Only ripples answer from the water.'); return; }
-        beacon = { x: wx, y: wy, until: Date.now() + 45000 };
+        beacon = { x: wx, y: wy, until: vnow() + 45000 * WARP }; // 45 real seconds, whatever the warp
         selected = null;
         render();
         toast('You call softly. The curious will come.');
@@ -1499,8 +1533,20 @@
 
   // The kith live: think & move every couple of seconds, glide between beats.
   setInterval(function () {
-    var events = W.kithTick(state, KITH_TICK_MS / 1000, beacon);
-    if (beacon && Date.now() > beacon.until) beacon = null;
+    var events = [];
+    if (WARP === 1) {
+      events = W.kithTick(state, KITH_TICK_MS / 1000, beacon);
+    } else {
+      // sub-step the accelerated world so behaviour stays sane
+      var steps = Math.max(1, Math.min(240, Math.round(WARP / 8)));
+      var dtEach = (KITH_TICK_MS / 1000) * WARP / steps;
+      for (var s = 0; s < steps; s++) {
+        events = events.concat(W.kithTick(state, dtEach, beacon));
+      }
+      W.advanceGrowth(state);
+      W.weatherTick(state);
+    }
+    if (beacon && vnow() > beacon.until) beacon = null;
     if (events && events.length > 0) {
       save();
       announceNews(events);
@@ -1535,7 +1581,7 @@
   // A browser can lose its memory; a file cannot. When a world has real
   // history and hasn't been preserved lately, say so — once, gently.
   setTimeout(function () {
-    if (state.clock > 60 && (!state.lastPreserve || Date.now() - state.lastPreserve > 24 * 3600 * 1000)) {
+    if (state.clock > 60 && (!state.lastPreserve || vnow() - state.lastPreserve > 24 * 3600 * 1000)) {
       toast('This world has history worth keeping. Press Preserve — the file is the only copy that can never be lost.');
     }
   }, 9000);

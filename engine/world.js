@@ -974,13 +974,19 @@
     var rng = mulberry32(hash32(worldId + ':wx:' + bucket));
     var roll = rng();
     var c = climateOf(worldId);
+    // the year leans on the sky: stormy winters, rainy springs
+    var season = seasonAt(t).key;
+    var storm = c.storm * (season === 'winter' ? 1.5 : season === 'autumn' ? 1.15 : 1);
+    var rain = c.rain * (season === 'spring' ? 1.35 : season === 'summer' ? 0.8 : 1);
+    var mist = c.mist * (season === 'autumn' ? 1.4 : 1);
+    var breeze = c.breeze * (season === 'summer' ? 1.2 : 1);
     var kind = 'clear';
-    if (roll < c.storm) kind = 'storm';
-    else if (roll < c.storm + c.rain) kind = 'rain';
-    else if (roll < c.storm + c.rain + c.mist) kind = 'mist';
-    else if (roll < c.storm + c.rain + c.mist + c.breeze) kind = 'breeze';
+    if (roll < storm) kind = 'storm';
+    else if (roll < storm + rain) kind = 'rain';
+    else if (roll < storm + rain + mist) kind = 'mist';
+    else if (roll < storm + rain + mist + breeze) kind = 'breeze';
     var label = kind === 'clear' ? 'clear' : (realmOf(worldId).realm.wx[kind] || kind);
-    return { kind: kind, bucket: bucket, intensity: 0.5 + rng() * 0.5, label: label };
+    return { kind: kind, bucket: bucket, intensity: 0.5 + rng() * 0.5, label: label, season: season };
   }
 
   var STORM_TEXTS = [
@@ -989,16 +995,31 @@
     'A great storm scoured {w}; by morning the air tasted washed and new.'
   ];
 
-  // Called by any live session; chronicles each storm exactly once, with a
-  // deterministic id so every copy of the world remembers the SAME storm.
+  var SEASON_TEXTS = {
+    spring: 'Spring came to {w}. The world quickens; everything green grows eager.',
+    summer: 'Summer settled over {w}: long light, easy living.',
+    autumn: 'Autumn arrived in {w}. Seeds ride the wind; the larder years for winter.',
+    winter: 'Winter closed around {w}. The lean season — blooms will be few, and the hearth matters.'
+  };
+
+  // Called by any live session; chronicles each storm (and each turning of
+  // the year) exactly once, with deterministic ids every copy agrees on.
   function weatherTick(w) {
-    var wx = weatherAt(w.id, env.now());
+    var now = env.now();
+    var wx = weatherAt(w.id, now);
     if (wx.kind === 'storm') {
       var id = 's' + w.id + '-' + wx.bucket;
       var already = w.chronicle.some(function (e) { return e.id === id; });
       if (!already) {
         var textRng = mulberry32(hash32(id));
         chronicle(w, 'storm', pick(textRng, STORM_TEXTS).replace('{w}', w.name), id);
+      }
+    }
+    var season = seasonAt(now);
+    if (season.index > seasonAt(w.born).index) { // no season predates the world
+      var seasonId = 'sn' + w.id + '-' + season.index;
+      if (!w.chronicle.some(function (e) { return e.id === seasonId; })) {
+        chronicle(w, 'storm', SEASON_TEXTS[season.key].replace('{w}', w.name), seasonId);
       }
     }
     return wx;
@@ -1123,12 +1144,43 @@
     return plant;
   }
 
+  /* ---------- seasons: the year turns for every world at once ----------
+   * A season lasts a real week; a year is 28 days. Seasons are a pure
+   * function of absolute time, so every copy of every world agrees on
+   * them without storing anything. */
+
+  var SEASON_MS = 7 * DAY;
+  var SEASONS = ['spring', 'summer', 'autumn', 'winter'];
+  var SEASON_GROWTH = { spring: 1.3, summer: 1.0, autumn: 0.85, winter: 0.5 };
+
+  function seasonAt(t) {
+    var index = Math.floor(t / SEASON_MS);
+    return { key: SEASONS[((index % 4) + 4) % 4], index: index };
+  }
+
+  // Effective growing-hours between two moments: the season multiplier
+  // integrated EXACTLY across every boundary, so growth is identical no
+  // matter how often (or when) a copy of the world samples it.
+  function growingHours(t0, t1) {
+    if (t1 <= t0) return 0;
+    var hours = 0;
+    var t = t0;
+    for (var guard = 0; guard < 400 && t < t1; guard++) {
+      var season = seasonAt(t);
+      var boundary = (season.index + 1) * SEASON_MS;
+      var end = Math.min(t1, boundary);
+      hours += ((end - t) / 3600000) * SEASON_GROWTH[season.key];
+      t = end;
+    }
+    return hours;
+  }
+
   function advanceGrowth(w) {
     var now = env.now();
     Object.keys(w.plants).forEach(function (id) {
       var p = w.plants[id];
       if (p.growth >= 1) { p.tick = now; return; }
-      var hours = Math.max(0, (now - (p.tick || p.planted)) / 3600000);
+      var hours = growingHours(p.tick || p.planted, now);
       p.growth = Math.min(1, p.growth + (hours / GROW_HOURS) * p.genome.rate * (p.soil || 1));
       p.tick = now;
     });
@@ -1331,7 +1383,9 @@
     var events = checkMortality(w, now);
     var terrain = makeTerrain(w.id);
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
-    var storm = weatherAt(w.id, now).kind === 'storm';
+    var wxNow = weatherAt(w.id, now);
+    var storm = wxNow.kind === 'storm';
+    var winter = wxNow.season === 'winter';
     var call = (beacon && now < beacon.until) ? beacon : null;
     var alive = livingKith(w);
     var blooming = Object.keys(w.plants).map(function (id) { return w.plants[id]; })
@@ -1342,6 +1396,7 @@
 
     alive.forEach(function (k) {
       var decayMul = storm && k.act !== 'shelter' ? 1.5 : 1;
+      if (winter) decayMul *= 1.15; // the lean season takes its share
       if (k.act === 'shelter' && structList.some(function (s) {
         return s.type === 'leanto' && structDist(s, k.x, k.y) < 0.07;
       })) decayMul = 0.6; // a roof is worth more than a rock
@@ -2193,6 +2248,8 @@
     terrainStats: terrainStats,
     weatherAt: weatherAt,
     weatherTick: weatherTick,
+    seasonAt: seasonAt,
+    growingHours: growingHours,
     newWorld: newWorld,
     looksLikeWorld: looksLikeWorld,
     ensureKith: ensureKith,
