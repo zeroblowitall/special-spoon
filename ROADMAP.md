@@ -57,12 +57,14 @@ The plan: a distinct `engine/mind.js` module — a real "brain file" in the code
 - **Day 27 — World & villages:** bigger map, closer zoom, clearing-with-fire, 1–2 villages.
 - **Day 28 — Rituals, myth & biographies; balance & playtest.**
 
-## Open decisions (asked 2026-07-09; fold answers in here)
+## Decisions — ANSWERED 2026-07-09 (these are now settled; build to them)
 
-- **Q1 — Brain approach:** _[pending]_ (recommended: rich in-file agent AI; not an LLM)
-- **Q2 — Darkness/tone:** _[pending]_ (recommended: real stakes, gentle hand)
-- **Q3 — Beyond the edge:** _[pending]_ (recommended: narrative-first, real frontier later)
-- **Q4 — Player role:** _[pending]_ (recommended: deeper *indirect* influence + dialogue)
+- **Q1 — Brain approach: RICH IN-FILE AGENT AI.** A dedicated `engine/mind.js` — needs + traits + goals/plans (GOAP-flavoured). NOT an external LLM, NOT (for now) evolved neural nets. Deterministic, offline, mergeable. This is the spine of everything below.
+- **Q2 — Darkness/tone: REAL STAKES, GENTLE HAND.** Death, danger, illness, theft/sabotage, *rare* violence, expeditions that can end in loss — framed with restraint and melancholy, **never gore**. Jeopardy you feel, in a world still lovely to sit in. (This refines the old "strife, not gore" rule upward: loss and even a killing are allowed, but the register stays elegiac, not brutal.)
+- **Q3 — Beyond the edge: BOTH, NARRATIVE FIRST.** Ship narrative expeditions first (a kith vanishes off-map and returns with a generated story/treasure/scar, or is mourned — deterministic, mergeable). Grow a **real explorable frontier later**, once the mind and projects are solid.
+- **Q4 — Player role: DEEPER INDIRECT INFLUENCE.** Stay the unseen gardener-god — no direct commands, no embodiment (for now). But give real tools and real *dialogue*: answer prayers/needs, name places into their myth & language, set blessings the emissary spreads, gift tools & seeds, call gatherings — choices with visible, sometimes moral, weight.
+
+*The phased plan above already matches these answers; no reordering needed. Expeditions (Day 24) are narrative-first with a real frontier deferred to a later era.*
 
 ## For whoever picks this up
 
