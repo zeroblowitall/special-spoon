@@ -1899,6 +1899,73 @@ for (let i = 0; i < 30; i++) {
 }
 check('the land forms real continents (a long unbroken run of ground)', bigLandFrac > 0.45);
 
+/* ---------- 30. gatherings & rituals: the life of a village ---------- */
+
+console.log('rituals');
+const RITDAY = 86400000;
+const savedRitNow = fakeNow;
+// a world with a hearth and two bonded folk, one of whom is lost
+function ritualBase() {
+  const w = W.newWorld();
+  const folk = Object.values(w.kith);
+  const a = folk[0], b = folk[1];
+  a.trust[b.id] = 0.8; b.trust[a.id] = 0.8;
+  b.x = a.x; b.y = a.y;
+  const day = Math.floor(fakeNow / RITDAY);
+  const hearth = W.buildStructure(w, a, 'hearth', day);
+  return { w, a, b, hearth, folk };
+}
+fakeNow += 10 * 3600 * 1000; // let the world settle a little
+const rb = ritualBase();
+fakeNow += W.BUILD_MS + 1000; // the hearth finishes rising
+rb.b.passed = fakeNow - 3600 * 1000; // lost an hour ago
+const twinRitA = clone(rb.w), twinRitB = clone(rb.w);
+W.ritualTick(rb.w, fakeNow, []);
+check('a funeral is held for a mourned one at the hearth',
+  rb.w.chronicle.some(e => e.id === 'fnl' + rb.b.id && e.kind === 'ritual'));
+check('the lost one is marked mourned', rb.w.kith[rb.b.id].mourned === true);
+W.ritualTick(rb.w, fakeNow, []);
+check('a funeral is held only once', rb.w.chronicle.filter(e => e.id === 'fnl' + rb.b.id).length === 1);
+
+// determinism: both copies hold the same rite, merged to one telling
+W.ritualTick(twinRitA, fakeNow, []); W.ritualTick(twinRitB, fakeNow, []);
+const ritMerged = clone(twinRitA);
+W.mergeWorlds(ritMerged, clone(twinRitB));
+check('reunited copies hold one funeral, not two',
+  ritMerged.chronicle.filter(e => e.id === 'fnl' + rb.b.id).length === 1);
+
+// no hearth, no rite: a passing among folk with nowhere to gather stays quiet
+const noHearth = W.newWorld();
+const nh = Object.values(noHearth.kith);
+nh[0].trust[nh[1].id] = 0.8; nh[1].trust[nh[0].id] = 0.8;
+nh[1].passed = fakeNow - 3600 * 1000;
+W.ritualTick(noHearth, fakeNow, []);
+check('no hearth, no funeral', !noHearth.chronicle.some(e => e.id === 'fnl' + nh[1].id));
+
+// a solitary passing, with a hearth but no bonds, is not a funeral
+const ritLoner = rb.folk[2];
+if (ritLoner) {
+  ritLoner.trust = {};
+  Object.values(rb.w.kith).forEach(o => { if (o.trust) delete o.trust[ritLoner.id]; });
+  ritLoner.passed = fakeNow - 3600 * 1000;
+  W.ritualTick(rb.w, fakeNow, []);
+  check('a solitary passing is mourned quietly, not with a rite', !rb.w.chronicle.some(e => e.id === 'fnl' + ritLoner.id));
+} else {
+  check('a solitary passing is mourned quietly, not with a rite', true, 'no third founder — skipped');
+}
+
+// a naming-day welcomes a child born into a village
+const babyId = 'ritbaby0001';
+rb.w.kith[babyId] = {
+  id: babyId, given: 'Newling', name: null, parents: [rb.a.id, rb.folk[2] ? rb.folk[2].id : rb.a.id],
+  born: fakeNow - 3600 * 1000, passed: null, x: rb.hearth.x, y: rb.hearth.y,
+  trust: {}, genome: rb.a.genome, brain: rb.a.brain, span: 20, energy: 0.7, u: 1
+};
+W.ritualTick(rb.w, fakeNow, []);
+check('a naming-day welcomes a newborn born into a village',
+  rb.w.chronicle.some(e => e.id === 'nmd' + babyId && e.kind === 'ritual'));
+fakeNow = savedRitNow;
+
 /* ---------- summary ---------- */
 
 console.log('');

@@ -1565,6 +1565,118 @@
     }
   }
 
+  /* ---------- gatherings & rituals: the life of a village ----------
+   * A village is more than a cluster of roofs — it is a people who come
+   * together. When one of the folk is lost, those who loved it gather at the
+   * hearth to mourn. When a child is born among them, they gather to welcome
+   * it. And now and then, in the evening, they gather simply to be together,
+   * and if one of them knows the song, it is sung.
+   *
+   * Rituals need a hearth (a gathering place). They fire ONCE, keyed to the
+   * deterministic event that occasions them (a death, a birth, a day), so
+   * every copy of a world holds the same rites and reunited worlds hold each
+   * once. The gathering itself — the folk drawing near the hearth — is
+   * ephemeral flavour, never merged. */
+
+  var GRIEF_WINDOW = 2 * DAY;    // a death is mourned if it was recent
+  var WELCOME_WINDOW = 1.5 * DAY; // a child is welcomed while still new
+  var GATHER_MS = 4 * 60 * 1000;  // how long the folk linger at a gathering
+
+  function raisedHearths(w, now) {
+    return Object.keys(w.structures || {}).map(function (id) { return w.structures[id]; })
+      .filter(function (s) { return s.type === 'hearth' && structRaised(s, now) >= 1; });
+  }
+  function nearestOf(list, x, y) {
+    var best = null, bestD = Infinity;
+    list.forEach(function (s) { var d = structDist(s, x, y); if (d < bestD) { bestD = d; best = s; } });
+    return best;
+  }
+  function villageNameAt(w, hearthId) {
+    var vc = null;
+    w.chronicle.forEach(function (e) { if (e.id === 'v' + hearthId) vc = e; });
+    var m = vc && /and the (.+?) live among/.exec(vc.text);
+    return m ? 'the ' + m[1] : 'the village';
+  }
+  // A line for what the lost one was — its most telling mark.
+  function elegyFor(w, k) {
+    if (k.lostBeyond) return 'who had walked beyond the edge of the world';
+    if (k.lostTo) return 'lost when the world itself turned';
+    if (k.takenBy) return 'taken by the beast at the edge';
+    var knows = knowsOf(k);
+    if (knows.indexOf('song') > -1) return 'who sang against the storms';
+    if (knows.indexOf('tending') > -1) return 'who tended the sick through the fever';
+    if (knows.indexOf('ward') > -1) return 'who kept the watch against the dark';
+    if (knows.indexOf('seedkeeping') > -1) return 'who kept the gardens green';
+    if (knows.indexOf('hearth') > -1) return 'who kept the fire alight';
+    if (k.relics && k.relics.length) return 'a traveller, home at last';
+    var kids = Object.keys(w.kith).filter(function (id) { var c = w.kith[id]; return c.parents && c.parents.indexOf(k.id) > -1; });
+    if (kids.length) return 'who leaves children behind';
+    return null;
+  }
+  function setGathering(w, hearth, now, kind) {
+    w.gathering = { x: hearth.x, y: hearth.y, until: now + GATHER_MS, kind: kind };
+  }
+
+  function ritualTick(w, now, events) {
+    var hearths = raisedHearths(w, now);
+    if (!hearths.length) return; // no hearth, no gathering place, no rites
+
+    // funerals: the folk mourn a recent loss that was one of their own
+    Object.keys(w.kith).forEach(function (id) {
+      var k = w.kith[id];
+      if (!k.passed || k.mourned || now - k.passed > GRIEF_WINDOW) return;
+      var ties = Object.keys(k.trust || {}).filter(function (tid) { return (k.trust[tid] || 0) >= 0.5; });
+      if (!ties.length) return; // a solitary passing stays quiet
+      k.mourned = true; k.u = bumpClock(w);
+      var mourners = ties.map(function (tid) { return w.kith[tid]; })
+        .filter(function (o) { return o && isAlive(o); }).map(kithLabel).slice(0, 3);
+      var was = elegyFor(w, k);
+      var hearth = nearestOf(hearths, k.x, k.y);
+      var text = 'The folk gathered at the hearth to mourn ' + kithLabel(k) + (was ? ', ' + was : '') + '. ' +
+        (mourners.length ? mourners.join(', ') + ' will remember.' : 'It will be remembered.');
+      chronicle(w, 'ritual', text, 'fnl' + k.id);
+      events.push({ kind: 'ritual', text: text });
+      if (hearth) setGathering(w, hearth, now, 'mourning');
+    });
+
+    // naming-days: a child born among the roofs is welcomed into the tribe
+    Object.keys(w.kith).forEach(function (id) {
+      var k = w.kith[id];
+      if (k.passed || k.welcomed || !k.parents || now - k.born > WELCOME_WINDOW) return;
+      var hearth = nearestOf(hearths, k.x, k.y);
+      if (!hearth || structDist(hearth, k.x, k.y) > 0.3) return; // must be born into a village
+      k.welcomed = true; k.u = bumpClock(w);
+      var tribe = tribeOfKith(w, k.id);
+      var text = 'At the hearth, the folk gathered to welcome the newborn ' + kithLabel(k) +
+        (tribe ? ' into ' + tribe.name.replace(/^the /, 'the ') : '') + ' — a naming-day.';
+      chronicle(w, 'ritual', text, 'nmd' + k.id);
+      events.push({ kind: 'ritual', text: text });
+      setGathering(w, hearth, now, 'naming');
+    });
+
+    // the evening gathering: now and then a village comes together, and sings
+    var dayBucket = Math.floor(now / DAY);
+    hearths.forEach(function (hearth) {
+      if (!w.chronicle.some(function (e) { return e.id === 'v' + hearth.id; })) return; // only true villages
+      var gid = 'gth' + hearth.id + dayBucket;
+      if (w.chronicle.some(function (e) { return e.id === gid; })) return; // at most once a day
+      var rng = mulberry32(hash32(w.id + ':gather:' + hearth.id + ':' + dayBucket));
+      if (rng() >= 0.25) return;                       // most days pass without one
+      var moment = dayBucket * DAY + Math.floor(rng() * DAY);
+      if (now < moment) return;                        // it happens at its appointed hour
+      var singer = livingKith(w).filter(function (o) {
+        return knowsOf(o).indexOf('song') > -1 && structDist(hearth, o.x, o.y) < 0.35;
+      })[0];
+      var vname = villageNameAt(w, hearth.id);
+      var text = singer
+        ? 'The folk of ' + vname + ' gathered at the hearth, and ' + kithLabel(singer) + ' raised a song the others took up.'
+        : 'The folk of ' + vname + ' gathered at the hearth as the light went, and were glad of one another.';
+      chronicle(w, 'ritual', text, gid);
+      events.push({ kind: 'ritual', text: text });
+      setGathering(w, hearth, now, singer ? 'song' : 'gathering');
+    });
+  }
+
   /* ---------- the almanac ----------
    * A book of pages that write themselves. Each page is a riddle until the
    * world makes it true; then it fills with the date and the names, and
@@ -2500,7 +2612,9 @@
     predatorTick(w, now, events);
     disasterTick(w, now, events);
     plagueTick(w, now, events);
+    ritualTick(w, now, events);
     var terrain = makeTerrain(w.id);
+    var gathering = (w.gathering && now < w.gathering.until) ? w.gathering : null;
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
     var wxNow = weatherAt(w.id, now);
     var storm = wxNow.kind === 'storm';
@@ -2777,6 +2891,18 @@
             return;
           }
         }
+      } else if (gathering && k.energy > 0.3 &&
+                 Math.abs(gathering.x - k.x) < 0.5 && Math.abs(gathering.y - k.y) < 0.5) {
+        // the folk are gathering at the hearth — draw near
+        var gd = Math.sqrt((gathering.x - k.x) * (gathering.x - k.x) + (gathering.y - k.y) * (gathering.y - k.y));
+        k.drive = 'belonging';
+        k.intent = gathering.kind === 'mourning' ? 'gathering to mourn'
+          : gathering.kind === 'naming' ? 'gathering for the naming'
+          : gathering.kind === 'song' ? 'gathering to sing'
+          : 'gathering at the hearth';
+        if (gd < 0.08) { k.act = 'rest'; k.actUntil = now + (4 + rng() * 6) * 1000; return; }
+        k.tx = Math.max(0.03, Math.min(0.97, gathering.x + (rng() - 0.5) * 0.08));
+        k.ty = Math.max(0.56, Math.min(0.97, gathering.y + (rng() - 0.5) * 0.06));
       } else if (socialUrge > wanderUrge && socialUrge > restUrge && alive.length > 1 && rng() < 0.5) {
         // seek company — the most trusted friend, or someone new if curious
         var friend = null, friendScore = -Infinity;
@@ -3609,6 +3735,7 @@
     disasterTick: disasterTick,
     plagueDue: plagueDue,
     plagueTick: plagueTick,
+    ritualTick: ritualTick,
     presentKith: presentKith,
     almanacTick: almanacTick,
     almanacPages: almanacPages,

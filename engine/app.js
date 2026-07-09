@@ -557,6 +557,14 @@
       svgParts.push('<g class="beckon" transform="translate(' + bpos.x.toFixed(1) + ' ' + bpos.y.toFixed(1) + ')">' +
         '<circle class="beckon-ripple" r="6"/><circle class="beckon-ripple r2" r="6"/></g>');
     }
+    // a gathering at the hearth: a warm ring of light the folk draw toward
+    if (state.gathering && vnow() < state.gathering.until) {
+      var gp = toScreen(state.gathering.x, state.gathering.y);
+      var warm = state.gathering.kind === 'mourning' ? '#9fb2d6' : '#ffcf8a';
+      svgParts.push('<g class="gathering gathering-' + state.gathering.kind + '" transform="translate(' + gp.x.toFixed(1) + ' ' + gp.y.toFixed(1) + ')">' +
+        '<circle class="gathering-glow" r="40" fill="' + warm + '"/>' +
+        '<circle class="gathering-glow g2" r="40" fill="' + warm + '"/></g>');
+    }
     svgParts.push('<g id="kith-layer">' + drawAllKith() + '</g>');
     svgParts.push(drawPredator());
 
@@ -1951,6 +1959,7 @@
     // while a hunter stalks or the country turns on the folk, repaint every
     // beat so the danger moves; otherwise repaint only when the light turns
     if (!openModal && (phaseNow !== lastDayPhase || W.predatorAt(state, vnow()) || W.disasterAt(state.id, vnow()) ||
+        (state.gathering && vnow() < state.gathering.until) ||
         W.livingKith(state).some(function (k) { return k.sick; }))) {
       lastDayPhase = phaseNow;
       render();

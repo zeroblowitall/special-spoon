@@ -230,6 +230,7 @@ html, body {
 .chronicle-entry .what { flex: 1; }
 .chronicle-entry.kind-merge .what { color: var(--accent); }
 .chronicle-entry.kind-born .what { color: var(--good); }
+.chronicle-entry.kind-ritual .what { color: #e8c9a0; font-style: italic; }
 
 /* Camera */
 #world { touch-action: none; cursor: grab; }
@@ -344,6 +345,13 @@ html, body {
   stroke-dasharray: 5 6;
   pointer-events: none;
 }
+/* Gatherings: a warm ring of light at the hearth the folk draw toward */
+.gathering { pointer-events: none; }
+.gathering-glow { opacity: 0.14; animation: gatherPulse 3.4s ease-in-out infinite; }
+.gathering-glow.g2 { animation-delay: 1.7s; }
+.gathering-mourning .gathering-glow { animation-duration: 5s; }
+@keyframes gatherPulse { 0% { opacity: 0.05; transform: scale(0.6); } 50% { opacity: 0.2; } 100% { opacity: 0.02; transform: scale(1.5); } }
+
 /* Illness: a fever-mark wavers over the sick (opacity only, so the mark's
  * own positioning transform is never overridden) */
 .kith-sick path { animation: sickWaver 2.2s ease-in-out infinite; }
