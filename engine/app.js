@@ -7,6 +7,7 @@
   'use strict';
 
   var W = window.DriftWorld;
+  var M = window.DriftMind;
   var STORE_PREFIX = 'driftgarden.';
   var KITH_TICK_MS = 2000;
 
@@ -859,6 +860,11 @@
     var label = k.name || (emissary ? k.given : '');
     var labelSvg = label ? '<text class="plant-label" x="0" y="14">' + escapeHtml(label) + '</text>' : '';
     var saying = (k.saying && k.sayingUntil && now < k.sayingUntil) ? escapeHtml(k.saying) : '';
+    // a visible current intention — what this mind is about, right now. Kept
+    // faint and small so a crowd reads as a village of purposes, not a wall of
+    // text; it yields to a speech bubble and hushes while the kith sleeps.
+    var intentShown = (!saying && k.intent && k.act !== 'sleep') ? escapeHtml(k.intent) : '';
+    var intentSvg = '<text class="kith-intent" x="0" y="' + (label ? 24 : 15) + '">' + intentShown + '</text>';
     // stagger bubbles by identity so close talkers don't overlap
     var speechLift = (-top + 8) * scale + 12 + (W.hash32(k.id) % 3) * 9;
     var speechShift = ((W.hash32(k.id + 'x') % 3) - 1) * 8;
@@ -879,7 +885,7 @@
       '<g class="pose">' +
       '<g transform="translate(0 ' + (inWater ? 3.5 : 0) + ') scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
       parts.join('') +
-      '</g></g></g>' + zSvg + labelSvg + speechSvg + '</g>';
+      '</g></g></g>' + zSvg + labelSvg + intentSvg + speechSvg + '</g>';
   }
 
   // Between full renders, glide the kith to their new positions cheaply.
@@ -902,12 +908,14 @@
       node.classList.toggle('act-eat', k.act === 'eat');
       node.classList.toggle('act-sleep', k.act === 'sleep');
       var speech = node.querySelector('.kith-speech');
+      var line = (k.saying && k.sayingUntil && now < k.sayingUntil) ? k.saying : '';
       if (speech) {
-        var line = (k.saying && k.sayingUntil && now < k.sayingUntil) ? k.saying : '';
         if (line && line !== lastSayings[k.id]) chirp(W.hash32(k.id + line));
         lastSayings[k.id] = line;
         speech.textContent = line;
       }
+      var intentEl = node.querySelector('.kith-intent');
+      if (intentEl) intentEl.textContent = (!line && k.intent && k.act !== 'sleep') ? k.intent : '';
     });
     if (missing || layer.querySelectorAll('.kith-group').length !== living.length) {
       render(); // someone was born, or someone left us — rebuild properly
@@ -1056,10 +1064,26 @@
       : '';
     var standing = W.realmBiome(state.id, W.biomeAt(W.makeTerrain(state.id), k.x, k.y));
     var kind = W.kindOf(k.genome);
+    // what's on its mind, right now — the intention, and the pressures behind it
+    var intentLine = k.intent
+      ? '<div class="intent-now">right now: <strong>' + escapeHtml(k.intent) + '</strong></div>'
+      : '';
+    var needsBars = '';
+    if (k.needs && M) {
+      var loudest = M.dominant(k.needs); // the pressure that presses hardest
+      needsBars = '<div class="needs" title="the pressures on this mind — the longest is what weighs on it">' +
+        M.NEEDS.map(function (n) {
+          var v = Math.round((k.needs[n] || 0) * 100);
+          return '<div class="need' + (loudest === n ? ' on' : '') + '">' +
+            '<span class="need-label">' + n + '</span>' +
+            '<span class="need-track"><span class="need-fill" style="width:' + v + '%"></span></span></div>';
+        }).join('') + '</div>';
+    }
     return '<div id="panel">' +
       '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
       '<div class="species">a ' + stage + ' ' + escapeHtml(kind.name) + ' kith' + (k.name ? ' · called ' + escapeHtml(k.given) + ' by its kin' : '') + '</div>' +
       '<div class="meta">' + ageText + ' · ' + mood + ' · on the ' + standing + '</div>' +
+      intentLine + needsBars +
       (tribeLine ? '<div class="meta">' + tribeLine + '</div>' : '') +
       (kinLine ? '<div class="meta">' + kinLine + '</div>' : '') +
       (bondLine ? '<div class="meta">' + bondLine + '</div>' : '') +
@@ -1132,8 +1156,9 @@
         if (state.emissary === k.id) traits.push('emissary');
         if (W.isSwimmer(k)) traits.push('swimmer');
         W.knowsOf(k).forEach(function (s) { traits.push({ seedkeeping: 'seed-keeper', song: 'singer', shelter: 'builder', hearth: 'hearth-keeper' }[s] || s); });
+        var doing = k.intent ? '<br><span class="muted">' + escapeHtml(k.intent) + '</span>' : '';
         return '<div class="chronicle-entry"><span class="what"><strong>' + escapeHtml(W.kithLabel(k)) + '</strong> · ' +
-          escapeHtml(kindName) + ' · ' + W.kithStage(k, censusNow) + ' · ' + mood +
+          escapeHtml(kindName) + ' · ' + W.kithStage(k, censusNow) + ' · ' + mood + doing +
           (traits.length ? '<br><span class="muted">' + escapeHtml(traits.join(', ')) + '</span>' : '') + '</span>' +
           '<span class="when"><button class="btn small" data-kith-focus="' + k.id + '">Visit</button></span></div>';
       }).join('');
@@ -1292,6 +1317,7 @@
 
   function selfHTML() {
     var style = document.getElementById('dg-style').textContent;
+    var mind = document.getElementById('dg-mind').textContent;
     var world = document.getElementById('dg-world').textContent;
     var app = document.getElementById('dg-app').textContent;
     var json = JSON.stringify(state).replace(/</g, '\\u003c');
@@ -1304,6 +1330,7 @@
       '<noscript><p style="padding:2rem;font-family:sans-serif">Driftgarden needs JavaScript to live. No internet connection is required — just JavaScript.</p></noscript>\n' +
       '<div id="stage"></div>\n' +
       '<script id="dg-state">window.DRIFT_STATE = ' + json + ';<\/script>\n' +
+      '<script id="dg-mind">' + mind + '<\/script>\n' +
       '<script id="dg-world">' + world + '<\/script>\n' +
       '<script id="dg-app">' + app + '<\/script>\n' +
       '</body>\n</html>\n';

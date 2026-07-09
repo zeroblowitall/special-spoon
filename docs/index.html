@@ -298,7 +298,60 @@ html, body {
   pointer-events: none;
   opacity: 0.95;
 }
+/* A kith's current intention, floated faintly beneath it — a village of
+ * purposes should read as calm, not shout. */
+.kith-intent {
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 7px;
+  fill: rgba(255, 255, 255, 0.6);
+  paint-order: stroke;
+  stroke: rgba(10, 14, 11, 0.5);
+  stroke-width: 2px;
+  text-anchor: middle;
+  pointer-events: none;
+  opacity: 0.72;
+}
+.selected .kith-intent { fill: var(--accent); opacity: 0.95; }
+
 .lex-word { font-family: Georgia, serif; font-style: italic; font-size: 1.05rem; color: var(--accent); }
+
+/* The panel's inner-life readout: the intention, and the pressures behind it */
+#panel .intent-now {
+  margin: 0.35rem 0 0.5rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+#panel .intent-now strong { color: var(--accent); font-weight: 600; }
+#panel .needs {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.5rem;
+  align-items: center;
+  margin: 0 0 0.6rem;
+}
+#panel .need { display: contents; }
+#panel .need-label {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  text-align: right;
+  letter-spacing: 0.02em;
+}
+#panel .need-track {
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+#panel .need-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--ink-soft);
+  transition: width 0.6s ease;
+}
+#panel .need.on .need-label { color: var(--accent); font-weight: 600; }
+#panel .need.on .need-fill { background: var(--accent); }
 
 /* Weather — skies change with a breath, not a switch */
 .wx-enter { animation: wxfadein 3.5s ease both; }
@@ -434,7 +487,126 @@ html, body {
 <p><strong>On a phone?</strong> Your device probably opened this file in a built-in viewer that doesn't run JavaScript. Save the file, then open it with a real browser: in your Files app, long-press the file and choose <em>Open with → Chrome</em> (or Firefox). The world will be waiting.</p>
 </div></noscript>
 <div id="stage"></div>
-<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.20.0 */;</script>
+<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.21.0 */;</script>
+<script id="dg-mind">
+/* Driftgarden — the mind.
+ * A kith's inner life: the pressures that push on it, the trait-weighted way
+ * it feels them, the one that presses hardest right now, and the plain words
+ * for what it means to do about it.
+ *
+ * This is "grown" intelligence, not borrowed: no network, no model, no chat.
+ * A kith decides from NEEDS + TRAITS + WORLD — nothing else — which is why two
+ * copies of a world, given the same clock, always reach the same conclusion,
+ * and why the merge stays sacred. Every function here is a pure function of a
+ * kith and its moment: no clock, no randomness, no DOM. It runs identically in
+ * the browser and in `node test.js`, and it never writes anything that has to
+ * be merged — a mind is felt, not stored.
+ *
+ * See ROADMAP.md — this is the spine of "Inner Lives" (v2): give the kith
+ * pressure, purpose, and a legible intention, so watching becomes reading.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.DriftMind = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  function clamp01(n) { return n < 0 ? 0 : n > 1 ? 1 : n; }
+
+  // The six pressures every kith lives under. Their order is their priority
+  // when two press equally hard — safety before hunger before the rest — but
+  // in practice the weights decide. Kept as a list so callers can iterate.
+  var NEEDS = ['safety', 'hunger', 'rest', 'belonging', 'curiosity', 'purpose'];
+
+  /* ---------- behaviour: the pressures that actually move a kith ----------
+   * These are the exact urges the tick has always used, gathered into one
+   * place and given names. Nothing random lives here, so the tick's own
+   * randomness — and therefore the determinism of the whole world — is
+   * untouched by asking the mind what it wants. */
+  function pressures(k, env) {
+    var b = k.brain;
+    return {
+      hunger: (1 - k.energy) * (0.6 + b.appetite * 0.8),
+      safety: env && env.storm ? (1.2 - b.boldness) : 0,
+      belonging: b.sociability * 0.55,
+      curiosity: 0.15 + b.curiosity * 0.35
+    };
+  }
+
+  /* ---------- feeling: the six needs, for the player to read ----------
+   * A fuller, gentler picture than the raw behavioural urges — normalised to
+   * 0..1 so it can be drawn as bars, and weighted by the kith's TRAITS so the
+   * same situation feels different to different minds. A glutton feels hunger
+   * sooner; a timid one feels the dark; a restless one is never quite at ease
+   * when everything is fine. This is the kith's personality, made visible. */
+  function needs(k, env) {
+    var b = k.brain;
+    var night = !!(env && env.night);
+    var storm = !!(env && env.storm);
+    var lack = 1 - k.energy;
+
+    var hunger = clamp01(lack * (0.55 + b.appetite * 0.6));
+    // sleepiness: low energy tires, the dark invites rest, the patient settle
+    // more readily — but the bold shrug off the night
+    var rest = clamp01(lack * 0.35 + (night ? 0.45 - b.boldness * 0.25 : 0.03) + b.patience * 0.12);
+    // unease: sharp in a storm for the timid, a low hum in the open dark
+    var safety = clamp01(storm ? (1.05 - b.boldness) : (night ? 0.22 - b.boldness * 0.18 : 0.04));
+    // the wish for company, cooled a little by a full belly's contentment
+    var belonging = clamp01(b.sociability * 0.6 - hunger * 0.15);
+    var curiosity = clamp01(0.12 + b.curiosity * 0.5 - hunger * 0.2);
+    // restlessness for something to make of oneself — only once the body is
+    // answered; a hungry, frightened kith has no room for ambition yet
+    var ease = 1 - Math.max(hunger, safety, rest * 0.6);
+    var purpose = clamp01((b.wanderlust * 0.45 + b.curiosity * 0.3) * ease);
+
+    return {
+      safety: safety, hunger: hunger, rest: rest,
+      belonging: belonging, curiosity: curiosity, purpose: purpose
+    };
+  }
+
+  // Which need presses hardest — the kith's state of mind in one word. Ties
+  // break by the fixed NEEDS priority (deterministic, no coin to flip).
+  function dominant(feel) {
+    var best = NEEDS[0], bestVal = -1;
+    for (var i = 0; i < NEEDS.length; i++) {
+      var n = NEEDS[i];
+      if (feel[n] > bestVal + 1e-9) { bestVal = feel[n]; best = n; }
+    }
+    return best;
+  }
+
+  // A plain-language reading of a drive, for when the kith is between actions
+  // and hasn't a more specific errand. The tick overrides this with something
+  // concrete ("heading for the sunmoss") whenever it can.
+  var DRIVE_WORDS = {
+    safety: 'ill at ease',
+    hunger: 'looking for something to eat',
+    rest: 'ready to rest',
+    belonging: 'wanting company',
+    curiosity: 'curious about the world',
+    purpose: 'restless for something to do'
+  };
+  function driveLabel(drive) { return DRIVE_WORDS[drive] || 'lost in thought'; }
+
+  // Short, poetic gloss of a drive — for a compact need-bar caption.
+  var DRIVE_GLOSS = {
+    safety: 'safe', hunger: 'fed', rest: 'rested',
+    belonging: 'together', curiosity: 'seeing', purpose: 'making'
+  };
+
+  return {
+    NEEDS: NEEDS,
+    pressures: pressures,
+    needs: needs,
+    dominant: dominant,
+    driveLabel: driveLabel,
+    DRIVE_WORDS: DRIVE_WORDS,
+    DRIVE_GLOSS: DRIVE_GLOSS
+  };
+});
+
+</script>
 <script id="dg-world">
 /* Driftgarden — world logic.
  * Everything that is TRUE about a world lives here: genomes, growth, kith,
@@ -447,6 +619,15 @@ html, body {
   else root.DriftWorld = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
+
+  /* ---------- the mind (a sibling module) ----------
+   * The kith's inner life lives in engine/mind.js — needs, traits, and the
+   * plain reading of what a kith means to do. It is bundled just before this
+   * file in the browser (window.DriftMind) and required directly under Node,
+   * so the tick and the test suite see exactly the same mind. */
+  var Mind = (typeof module === 'object' && module.exports)
+    ? require('./mind.js')
+    : (typeof self !== 'undefined' ? self.DriftMind : this.DriftMind);
 
   /* ---------- environment (injectable for tests) ---------- */
 
@@ -2169,6 +2350,7 @@ html, body {
     var storm = wxNow.kind === 'storm';
     var winter = wxNow.season === 'winter';
     var night = isNight(now);
+    var mindEnv = { night: night, storm: storm };
     var call = (beacon && now < beacon.until) ? beacon : null;
     var alive = livingKith(w);
     var blooming = Object.keys(w.plants).map(function (id) { return w.plants[id]; })
@@ -2188,7 +2370,16 @@ html, body {
       k.energy = Math.max(0, k.energy - decay);
       if (k.energy <= 0 && !k.starving) k.starving = now;
 
+      // the inner life, read afresh each tick: the six pressures, the one that
+      // presses hardest, and a plain word for it — all ephemeral, never merged,
+      // a mind felt rather than stored. A specific errand below may overwrite
+      // the intention with something concrete ("heading for the sunmoss").
+      k.needs = Mind.needs(k, mindEnv);
+      k.drive = Mind.dominant(k.needs);
+      k.intent = Mind.driveLabel(k.drive);
+
       if (k.act === 'eat') {
+        k.intent = 'sipping nectar'; k.drive = 'hunger';
         if (now >= k.actUntil) {
           var plant = k.eating ? w.plants[k.eating] : null;
           var meal = 0.5;
@@ -2240,6 +2431,7 @@ html, body {
             k.saying = glad.word; k.sayingUntil = now + 3000;
           }
         } else {
+          k.intent = 'asleep'; k.drive = 'rest';
           // safe sleep mends faster: a roof, a hearth, or kin close by
           var sheltered = structList.some(function (s) { return structDist(s, k.x, k.y) < 0.09; });
           k.energy = Math.min(1, k.energy + ENERGY_DECAY_PER_SEC * (sheltered ? 3 : 1.4) * dt);
@@ -2255,6 +2447,8 @@ html, body {
         }
       }
       if (k.act === 'rest' || k.act === 'shelter') {
+        k.intent = k.act === 'shelter' ? 'waiting out the storm' : 'resting a while';
+        k.drive = k.act === 'shelter' ? 'safety' : 'rest';
         if (k.act === 'shelter' && !storm) { k.act = 'wander'; k.tx = null; }
         else if (k.act === 'rest' && now >= k.actUntil) { k.act = 'wander'; k.tx = null; }
         else if (k.act === 'shelter') {
@@ -2287,11 +2481,15 @@ html, body {
       }
 
       /* -- the mind chooses -- */
+      // the pressures come straight from engine/mind.js now; only the momentary
+      // whim to settle keeps its own coin-flip, so the world's determinism is
+      // untouched. Same numbers, same order — but the reasoning has a home.
       var brain = k.brain;
-      var hungerUrge = (1 - k.energy) * (0.6 + brain.appetite * 0.8);
-      var stormUrge = storm ? (1.2 - brain.boldness) : 0;
-      var socialUrge = brain.sociability * 0.55;
-      var wanderUrge = 0.15 + brain.curiosity * 0.35;
+      var urge = Mind.pressures(k, mindEnv);
+      var hungerUrge = urge.hunger;
+      var stormUrge = urge.safety;
+      var socialUrge = urge.belonging;
+      var wanderUrge = urge.curiosity;
       var restUrge = brain.patience * 0.3 * rng();
 
       if (stormUrge > hungerUrge && stormUrge > 0.5) {
@@ -2310,10 +2508,12 @@ html, body {
           var sb = biomeAt(terrain, sx, sy);
           if (sb === 'rock' || sb === 'peak') { refuge = { x: sx, y: sy }; break; }
         }
+        k.intent = 'making for shelter'; k.drive = 'safety';
         if (refuge && (Math.abs(refuge.x - k.x) > 0.02 || Math.abs(refuge.y - k.y) > 0.02)) {
           k.tx = refuge.x; k.ty = refuge.y;
         } else {
           k.act = 'shelter'; k.tx = null;
+          k.intent = 'bracing against the storm';
           return;
         }
       } else if (night && k.energy > 0.35 && brain.boldness < 0.8) {
@@ -2324,10 +2524,12 @@ html, body {
           var d = structDist(s, k.x, k.y);
           if (d < bedD) { bedD = d; bed = s; }
         });
+        k.intent = 'looking for a place to sleep'; k.drive = 'rest';
         if (bed && (Math.abs(bed.x - k.x) > 0.02 || Math.abs(bed.y - k.y) > 0.02)) {
           k.tx = bed.x; k.ty = bed.y;
         } else {
           k.act = 'sleep'; k.tx = null;
+          k.intent = 'settling down to sleep';
           return;
         }
       } else if (hungerUrge > 0.45 && blooming.length > 0) {
@@ -2343,6 +2545,7 @@ html, body {
         if (best) {
           var bd = Math.sqrt((best.x - k.x) * (best.x - k.x) + (best.y - k.y) * (best.y - k.y));
           k.tx = best.x; k.ty = best.y;
+          k.intent = 'heading for the ' + best.species; k.drive = 'hunger';
           if (bd < 0.035) {
             // strife, not gore: two hungry strangers at one bloom is a contest
             var rival = null;
@@ -2380,6 +2583,7 @@ html, body {
             }
             k.act = 'eat'; k.eating = best.id;
             k.actUntil = now + EAT_SECONDS * 1000;
+            k.intent = 'sipping nectar';
             return;
           }
         }
@@ -2395,13 +2599,16 @@ html, body {
         });
         if (friend) {
           var fd = Math.sqrt((friend.x - k.x) * (friend.x - k.x) + (friend.y - k.y) * (friend.y - k.y));
+          k.drive = 'belonging';
           if (fd < 0.05) {
             // arrived beside them — linger; the encounter pass does the rest
             k.act = 'rest';
             k.actUntil = now + (3 + rng() * 5) * 1000;
+            k.intent = 'sitting with ' + kithLabel(friend);
             return;
           }
           k.tx = friend.x; k.ty = friend.y;
+          k.intent = 'going to find ' + kithLabel(friend);
         }
       } else if (k.tx === null || (Math.abs(k.tx - k.x) < 0.01 && Math.abs(k.ty - k.y) < 0.01)) {
         // a soft call on the wind — the curious answer it, and remember
@@ -2410,14 +2617,18 @@ html, body {
           var by = Math.max(0.56, Math.min(0.97, call.y + (rng() - 0.5) * 0.04));
           if (canStandAt(terrain, k, bx, by)) {
             k.tx = bx; k.ty = by;
+            k.intent = 'drawn by something on the wind'; k.drive = 'curiosity';
             if (k.gCallMark !== call.until) { k.g = (k.g || 0) + 0.08; k.gCallMark = call.until; }
           }
         } else if (rng() < brain.patience * 0.6) {
           k.act = 'rest';
           k.actUntil = now + (4 + rng() * 12) * 1000;
+          k.intent = 'pausing a moment'; k.drive = 'rest';
           return;
         } else {
-          // pick somewhere new to be — where this body can go
+          // pick somewhere new to be — where this body can go. A kith with
+          // nothing pressing wanders on purpose: restlessness looking for shape.
+          k.intent = k.drive === 'purpose' ? 'off exploring, seeking something to do' : 'wandering the world';
           for (var tries = 0; tries < 8; tries++) {
             var range = 0.1 + k.brain.wanderlust * 0.5;
             var cx = Math.max(0.03, Math.min(0.97, k.x + (rng() - 0.5) * range * 2));
@@ -3152,6 +3363,7 @@ html, body {
   'use strict';
 
   var W = window.DriftWorld;
+  var M = window.DriftMind;
   var STORE_PREFIX = 'driftgarden.';
   var KITH_TICK_MS = 2000;
 
@@ -4004,6 +4216,11 @@ html, body {
     var label = k.name || (emissary ? k.given : '');
     var labelSvg = label ? '<text class="plant-label" x="0" y="14">' + escapeHtml(label) + '</text>' : '';
     var saying = (k.saying && k.sayingUntil && now < k.sayingUntil) ? escapeHtml(k.saying) : '';
+    // a visible current intention — what this mind is about, right now. Kept
+    // faint and small so a crowd reads as a village of purposes, not a wall of
+    // text; it yields to a speech bubble and hushes while the kith sleeps.
+    var intentShown = (!saying && k.intent && k.act !== 'sleep') ? escapeHtml(k.intent) : '';
+    var intentSvg = '<text class="kith-intent" x="0" y="' + (label ? 24 : 15) + '">' + intentShown + '</text>';
     // stagger bubbles by identity so close talkers don't overlap
     var speechLift = (-top + 8) * scale + 12 + (W.hash32(k.id) % 3) * 9;
     var speechShift = ((W.hash32(k.id + 'x') % 3) - 1) * 8;
@@ -4024,7 +4241,7 @@ html, body {
       '<g class="pose">' +
       '<g transform="translate(0 ' + (inWater ? 3.5 : 0) + ') scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
       parts.join('') +
-      '</g></g></g>' + zSvg + labelSvg + speechSvg + '</g>';
+      '</g></g></g>' + zSvg + labelSvg + intentSvg + speechSvg + '</g>';
   }
 
   // Between full renders, glide the kith to their new positions cheaply.
@@ -4047,12 +4264,14 @@ html, body {
       node.classList.toggle('act-eat', k.act === 'eat');
       node.classList.toggle('act-sleep', k.act === 'sleep');
       var speech = node.querySelector('.kith-speech');
+      var line = (k.saying && k.sayingUntil && now < k.sayingUntil) ? k.saying : '';
       if (speech) {
-        var line = (k.saying && k.sayingUntil && now < k.sayingUntil) ? k.saying : '';
         if (line && line !== lastSayings[k.id]) chirp(W.hash32(k.id + line));
         lastSayings[k.id] = line;
         speech.textContent = line;
       }
+      var intentEl = node.querySelector('.kith-intent');
+      if (intentEl) intentEl.textContent = (!line && k.intent && k.act !== 'sleep') ? k.intent : '';
     });
     if (missing || layer.querySelectorAll('.kith-group').length !== living.length) {
       render(); // someone was born, or someone left us — rebuild properly
@@ -4201,10 +4420,26 @@ html, body {
       : '';
     var standing = W.realmBiome(state.id, W.biomeAt(W.makeTerrain(state.id), k.x, k.y));
     var kind = W.kindOf(k.genome);
+    // what's on its mind, right now — the intention, and the pressures behind it
+    var intentLine = k.intent
+      ? '<div class="intent-now">right now: <strong>' + escapeHtml(k.intent) + '</strong></div>'
+      : '';
+    var needsBars = '';
+    if (k.needs && M) {
+      var loudest = M.dominant(k.needs); // the pressure that presses hardest
+      needsBars = '<div class="needs" title="the pressures on this mind — the longest is what weighs on it">' +
+        M.NEEDS.map(function (n) {
+          var v = Math.round((k.needs[n] || 0) * 100);
+          return '<div class="need' + (loudest === n ? ' on' : '') + '">' +
+            '<span class="need-label">' + n + '</span>' +
+            '<span class="need-track"><span class="need-fill" style="width:' + v + '%"></span></span></div>';
+        }).join('') + '</div>';
+    }
     return '<div id="panel">' +
       '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
       '<div class="species">a ' + stage + ' ' + escapeHtml(kind.name) + ' kith' + (k.name ? ' · called ' + escapeHtml(k.given) + ' by its kin' : '') + '</div>' +
       '<div class="meta">' + ageText + ' · ' + mood + ' · on the ' + standing + '</div>' +
+      intentLine + needsBars +
       (tribeLine ? '<div class="meta">' + tribeLine + '</div>' : '') +
       (kinLine ? '<div class="meta">' + kinLine + '</div>' : '') +
       (bondLine ? '<div class="meta">' + bondLine + '</div>' : '') +
@@ -4277,8 +4512,9 @@ html, body {
         if (state.emissary === k.id) traits.push('emissary');
         if (W.isSwimmer(k)) traits.push('swimmer');
         W.knowsOf(k).forEach(function (s) { traits.push({ seedkeeping: 'seed-keeper', song: 'singer', shelter: 'builder', hearth: 'hearth-keeper' }[s] || s); });
+        var doing = k.intent ? '<br><span class="muted">' + escapeHtml(k.intent) + '</span>' : '';
         return '<div class="chronicle-entry"><span class="what"><strong>' + escapeHtml(W.kithLabel(k)) + '</strong> · ' +
-          escapeHtml(kindName) + ' · ' + W.kithStage(k, censusNow) + ' · ' + mood +
+          escapeHtml(kindName) + ' · ' + W.kithStage(k, censusNow) + ' · ' + mood + doing +
           (traits.length ? '<br><span class="muted">' + escapeHtml(traits.join(', ')) + '</span>' : '') + '</span>' +
           '<span class="when"><button class="btn small" data-kith-focus="' + k.id + '">Visit</button></span></div>';
       }).join('');
@@ -4437,6 +4673,7 @@ html, body {
 
   function selfHTML() {
     var style = document.getElementById('dg-style').textContent;
+    var mind = document.getElementById('dg-mind').textContent;
     var world = document.getElementById('dg-world').textContent;
     var app = document.getElementById('dg-app').textContent;
     var json = JSON.stringify(state).replace(/</g, '\\u003c');
@@ -4449,6 +4686,7 @@ html, body {
       '<noscript><p style="padding:2rem;font-family:sans-serif">Driftgarden needs JavaScript to live. No internet connection is required — just JavaScript.</p></noscript>\n' +
       '<div id="stage"></div>\n' +
       '<script id="dg-state">window.DRIFT_STATE = ' + json + ';<\/script>\n' +
+      '<script id="dg-mind">' + mind + '<\/script>\n' +
       '<script id="dg-world">' + world + '<\/script>\n' +
       '<script id="dg-app">' + app + '<\/script>\n' +
       '</body>\n</html>\n';

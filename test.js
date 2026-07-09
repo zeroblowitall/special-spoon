@@ -37,7 +37,9 @@ function stable(value) {
 
 // Positions are presentation, not content: every world settles travellers
 // onto its OWN land, so x/y legitimately differ between copies.
-const POSITION_KEYS = { x: 1, y: 1, tx: 1, ty: 1, facing: 1, saying: 1, sayingUntil: 1, gCallMark: 1 };
+// The mind, too, is presentation: needs/drive/intent are felt fresh each tick
+// from ephemeral state (energy, act, weather), never stored and never merged.
+const POSITION_KEYS = { x: 1, y: 1, tx: 1, ty: 1, facing: 1, saying: 1, sayingUntil: 1, gCallMark: 1, needs: 1, drive: 1, intent: 1 };
 function content(value) {
   const c = clone(value);
   (function strip(node) {
@@ -1326,6 +1328,70 @@ check('a hostile giant is rejected before parsing', (() => {
   const out = W.extractWorld(giant);
   return out === null && Date.now() - started < 500;
 })());
+
+/* ---------- 23. the mind: needs, traits, drive, intention ---------- */
+
+console.log('the mind');
+const Mind = require('./engine/mind.js');
+
+check('the mind is a module of its own', Mind && typeof Mind.needs === 'function' && Array.isArray(Mind.NEEDS));
+check('there are six needs', Mind.NEEDS.length === 6);
+
+function testBrain(over) {
+  return Object.assign({
+    appetite: 0.5, sociability: 0.5, boldness: 0.5, wanderlust: 0.5, curiosity: 0.5, patience: 0.5
+  }, over || {});
+}
+
+// every need is a pressure in 0..1, whatever the mood
+const midKith = { energy: 0.4, brain: testBrain() };
+const feel = Mind.needs(midKith, { night: false, storm: false });
+check('every need reads as a pressure in 0..1',
+  Mind.NEEDS.every(n => typeof feel[n] === 'number' && feel[n] >= 0 && feel[n] <= 1));
+
+// TRAITS colour feeling: the same empty belly gnaws harder at a glutton
+const glutton = { energy: 0.4, brain: testBrain({ appetite: 0.95 }) };
+const ascetic = { energy: 0.4, brain: testBrain({ appetite: 0.05 }) };
+check('a glutton feels hunger sooner than an ascetic',
+  Mind.needs(glutton, {}).hunger > Mind.needs(ascetic, {}).hunger);
+// the sociable ache for company more than the solitary
+const social = { energy: 0.9, brain: testBrain({ sociability: 0.95 }) };
+const loner = { energy: 0.9, brain: testBrain({ sociability: 0.05 }) };
+check('the sociable feel belonging more keenly',
+  Mind.needs(social, {}).belonging > Mind.needs(loner, {}).belonging);
+// the bold shrug off the dark that unsettles the timid
+const bold = { energy: 0.8, brain: testBrain({ boldness: 0.95 }) };
+const timid = { energy: 0.8, brain: testBrain({ boldness: 0.05 }) };
+check('the timid feel the night, the bold do not',
+  Mind.needs(timid, { night: true }).safety > Mind.needs(bold, { night: true }).safety);
+
+// the pressing need is the state of mind — and ties break, deterministically
+const starving = { energy: 0.02, brain: testBrain() };
+check('an empty belly is what drives the starving', Mind.dominant(Mind.needs(starving, {})) === 'hunger');
+check('dominant is always one of the six', Mind.NEEDS.indexOf(Mind.dominant(feel)) > -1);
+check('the mind is pure — same moment, same feeling',
+  JSON.stringify(Mind.needs(midKith, { night: true })) === JSON.stringify(Mind.needs(midKith, { night: true })));
+
+// PURPOSE is a luxury of the answered body: no room for ambition while starving
+const easeful = { energy: 1, brain: testBrain({ wanderlust: 0.8, curiosity: 0.7 }) };
+const desperate = { energy: 0.02, brain: testBrain({ wanderlust: 0.8, curiosity: 0.7 }) };
+check('purpose stirs only once the body is answered',
+  Mind.needs(easeful, {}).purpose > Mind.needs(desperate, {}).purpose + 0.1);
+
+// the behavioural pressures are exactly the urges the world has always used,
+// so routing the tick through the mind changes no outcome (219 above prove it)
+const p = Mind.pressures({ energy: 0.3, brain: testBrain({ appetite: 0.5, boldness: 0.4 }) }, { storm: true });
+check('hunger pressure matches the ancient formula', Math.abs(p.hunger - (1 - 0.3) * (0.6 + 0.5 * 0.8)) < 1e-9);
+check('a storm frightens the timid more', Math.abs(p.safety - (1.2 - 0.4)) < 1e-9);
+check('a calm sky presses no fear', Mind.pressures({ energy: 0.5, brain: testBrain() }, { storm: false }).safety === 0);
+
+// and in the living world: every kith wears a legible mind after a tick
+const mindedWorld = W.newWorld();
+W.kithTick(mindedWorld, 2);
+const minded = W.livingKith(mindedWorld);
+check('a ticked world gives every kith a mind',
+  minded.length > 0 && minded.every(k => k.needs && Mind.NEEDS.indexOf(k.drive) > -1 &&
+    typeof k.intent === 'string' && k.intent.length > 0));
 
 /* ---------- summary ---------- */
 

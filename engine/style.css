@@ -290,7 +290,60 @@ html, body {
   pointer-events: none;
   opacity: 0.95;
 }
+/* A kith's current intention, floated faintly beneath it — a village of
+ * purposes should read as calm, not shout. */
+.kith-intent {
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 7px;
+  fill: rgba(255, 255, 255, 0.6);
+  paint-order: stroke;
+  stroke: rgba(10, 14, 11, 0.5);
+  stroke-width: 2px;
+  text-anchor: middle;
+  pointer-events: none;
+  opacity: 0.72;
+}
+.selected .kith-intent { fill: var(--accent); opacity: 0.95; }
+
 .lex-word { font-family: Georgia, serif; font-style: italic; font-size: 1.05rem; color: var(--accent); }
+
+/* The panel's inner-life readout: the intention, and the pressures behind it */
+#panel .intent-now {
+  margin: 0.35rem 0 0.5rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+#panel .intent-now strong { color: var(--accent); font-weight: 600; }
+#panel .needs {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.5rem;
+  align-items: center;
+  margin: 0 0 0.6rem;
+}
+#panel .need { display: contents; }
+#panel .need-label {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  text-align: right;
+  letter-spacing: 0.02em;
+}
+#panel .need-track {
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+#panel .need-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--ink-soft);
+  transition: width 0.6s ease;
+}
+#panel .need.on .need-label { color: var(--accent); font-weight: 600; }
+#panel .need.on .need-fill { background: var(--accent); }
 
 /* Weather — skies change with a breath, not a switch */
 .wx-enter { animation: wxfadein 3.5s ease both; }

@@ -10,6 +10,15 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+  /* ---------- the mind (a sibling module) ----------
+   * The kith's inner life lives in engine/mind.js — needs, traits, and the
+   * plain reading of what a kith means to do. It is bundled just before this
+   * file in the browser (window.DriftMind) and required directly under Node,
+   * so the tick and the test suite see exactly the same mind. */
+  var Mind = (typeof module === 'object' && module.exports)
+    ? require('./mind.js')
+    : (typeof self !== 'undefined' ? self.DriftMind : this.DriftMind);
+
   /* ---------- environment (injectable for tests) ---------- */
 
   var env = {
@@ -1731,6 +1740,7 @@
     var storm = wxNow.kind === 'storm';
     var winter = wxNow.season === 'winter';
     var night = isNight(now);
+    var mindEnv = { night: night, storm: storm };
     var call = (beacon && now < beacon.until) ? beacon : null;
     var alive = livingKith(w);
     var blooming = Object.keys(w.plants).map(function (id) { return w.plants[id]; })
@@ -1750,7 +1760,16 @@
       k.energy = Math.max(0, k.energy - decay);
       if (k.energy <= 0 && !k.starving) k.starving = now;
 
+      // the inner life, read afresh each tick: the six pressures, the one that
+      // presses hardest, and a plain word for it — all ephemeral, never merged,
+      // a mind felt rather than stored. A specific errand below may overwrite
+      // the intention with something concrete ("heading for the sunmoss").
+      k.needs = Mind.needs(k, mindEnv);
+      k.drive = Mind.dominant(k.needs);
+      k.intent = Mind.driveLabel(k.drive);
+
       if (k.act === 'eat') {
+        k.intent = 'sipping nectar'; k.drive = 'hunger';
         if (now >= k.actUntil) {
           var plant = k.eating ? w.plants[k.eating] : null;
           var meal = 0.5;
@@ -1802,6 +1821,7 @@
             k.saying = glad.word; k.sayingUntil = now + 3000;
           }
         } else {
+          k.intent = 'asleep'; k.drive = 'rest';
           // safe sleep mends faster: a roof, a hearth, or kin close by
           var sheltered = structList.some(function (s) { return structDist(s, k.x, k.y) < 0.09; });
           k.energy = Math.min(1, k.energy + ENERGY_DECAY_PER_SEC * (sheltered ? 3 : 1.4) * dt);
@@ -1817,6 +1837,8 @@
         }
       }
       if (k.act === 'rest' || k.act === 'shelter') {
+        k.intent = k.act === 'shelter' ? 'waiting out the storm' : 'resting a while';
+        k.drive = k.act === 'shelter' ? 'safety' : 'rest';
         if (k.act === 'shelter' && !storm) { k.act = 'wander'; k.tx = null; }
         else if (k.act === 'rest' && now >= k.actUntil) { k.act = 'wander'; k.tx = null; }
         else if (k.act === 'shelter') {
@@ -1849,11 +1871,15 @@
       }
 
       /* -- the mind chooses -- */
+      // the pressures come straight from engine/mind.js now; only the momentary
+      // whim to settle keeps its own coin-flip, so the world's determinism is
+      // untouched. Same numbers, same order — but the reasoning has a home.
       var brain = k.brain;
-      var hungerUrge = (1 - k.energy) * (0.6 + brain.appetite * 0.8);
-      var stormUrge = storm ? (1.2 - brain.boldness) : 0;
-      var socialUrge = brain.sociability * 0.55;
-      var wanderUrge = 0.15 + brain.curiosity * 0.35;
+      var urge = Mind.pressures(k, mindEnv);
+      var hungerUrge = urge.hunger;
+      var stormUrge = urge.safety;
+      var socialUrge = urge.belonging;
+      var wanderUrge = urge.curiosity;
       var restUrge = brain.patience * 0.3 * rng();
 
       if (stormUrge > hungerUrge && stormUrge > 0.5) {
@@ -1872,10 +1898,12 @@
           var sb = biomeAt(terrain, sx, sy);
           if (sb === 'rock' || sb === 'peak') { refuge = { x: sx, y: sy }; break; }
         }
+        k.intent = 'making for shelter'; k.drive = 'safety';
         if (refuge && (Math.abs(refuge.x - k.x) > 0.02 || Math.abs(refuge.y - k.y) > 0.02)) {
           k.tx = refuge.x; k.ty = refuge.y;
         } else {
           k.act = 'shelter'; k.tx = null;
+          k.intent = 'bracing against the storm';
           return;
         }
       } else if (night && k.energy > 0.35 && brain.boldness < 0.8) {
@@ -1886,10 +1914,12 @@
           var d = structDist(s, k.x, k.y);
           if (d < bedD) { bedD = d; bed = s; }
         });
+        k.intent = 'looking for a place to sleep'; k.drive = 'rest';
         if (bed && (Math.abs(bed.x - k.x) > 0.02 || Math.abs(bed.y - k.y) > 0.02)) {
           k.tx = bed.x; k.ty = bed.y;
         } else {
           k.act = 'sleep'; k.tx = null;
+          k.intent = 'settling down to sleep';
           return;
         }
       } else if (hungerUrge > 0.45 && blooming.length > 0) {
@@ -1905,6 +1935,7 @@
         if (best) {
           var bd = Math.sqrt((best.x - k.x) * (best.x - k.x) + (best.y - k.y) * (best.y - k.y));
           k.tx = best.x; k.ty = best.y;
+          k.intent = 'heading for the ' + best.species; k.drive = 'hunger';
           if (bd < 0.035) {
             // strife, not gore: two hungry strangers at one bloom is a contest
             var rival = null;
@@ -1942,6 +1973,7 @@
             }
             k.act = 'eat'; k.eating = best.id;
             k.actUntil = now + EAT_SECONDS * 1000;
+            k.intent = 'sipping nectar';
             return;
           }
         }
@@ -1957,13 +1989,16 @@
         });
         if (friend) {
           var fd = Math.sqrt((friend.x - k.x) * (friend.x - k.x) + (friend.y - k.y) * (friend.y - k.y));
+          k.drive = 'belonging';
           if (fd < 0.05) {
             // arrived beside them — linger; the encounter pass does the rest
             k.act = 'rest';
             k.actUntil = now + (3 + rng() * 5) * 1000;
+            k.intent = 'sitting with ' + kithLabel(friend);
             return;
           }
           k.tx = friend.x; k.ty = friend.y;
+          k.intent = 'going to find ' + kithLabel(friend);
         }
       } else if (k.tx === null || (Math.abs(k.tx - k.x) < 0.01 && Math.abs(k.ty - k.y) < 0.01)) {
         // a soft call on the wind — the curious answer it, and remember
@@ -1972,14 +2007,18 @@
           var by = Math.max(0.56, Math.min(0.97, call.y + (rng() - 0.5) * 0.04));
           if (canStandAt(terrain, k, bx, by)) {
             k.tx = bx; k.ty = by;
+            k.intent = 'drawn by something on the wind'; k.drive = 'curiosity';
             if (k.gCallMark !== call.until) { k.g = (k.g || 0) + 0.08; k.gCallMark = call.until; }
           }
         } else if (rng() < brain.patience * 0.6) {
           k.act = 'rest';
           k.actUntil = now + (4 + rng() * 12) * 1000;
+          k.intent = 'pausing a moment'; k.drive = 'rest';
           return;
         } else {
-          // pick somewhere new to be — where this body can go
+          // pick somewhere new to be — where this body can go. A kith with
+          // nothing pressing wanders on purpose: restlessness looking for shape.
+          k.intent = k.drive === 'purpose' ? 'off exploring, seeking something to do' : 'wandering the world';
           for (var tries = 0; tries < 8; tries++) {
             var range = 0.1 + k.brain.wanderlust * 0.5;
             var cx = Math.max(0.03, Math.min(0.97, k.x + (rng() - 0.5) * range * 2));
