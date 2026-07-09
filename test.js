@@ -864,7 +864,7 @@ const waterWord = gA.lex.water.word;
 check('it is built from the speaker\'s own words',
   sentence === wantWord + ' ' + waterWord || sentence === waterWord + ' ' + wantWord);
 check('the order follows the speaker\'s convention',
-  (gA.lex[':order'].word === 'mf') === (sentence.indexOf(wantWord) === 0));
+  (gA.lex[':order'].word === 'mf') === (sentence.split(' ')[0] === wantWord));
 
 // order converges like any word
 gA.lex[':order'] = { word: 'mf', s: 0.9, by: gA.id };
@@ -1879,6 +1879,25 @@ if (cata) {
   }
 }
 fakeNow = savedCataNow;
+
+/* ---------- 29. the larger land: real continents, weather unbound from it ---------- */
+
+console.log('the larger land');
+// the fractal terrain makes real continents — some world has a long unbroken
+// run of standable ground across its middle (flat noise would fragment it)
+let bigLandFrac = 0;
+for (let i = 0; i < 30; i++) {
+  const lw = W.newWorld();
+  const lterr = W.makeTerrain(lw.id);
+  const probe = Object.values(lw.kith)[0];
+  let run = 0, best = 0;
+  for (let c = 0; c < lterr.cols; c++) {
+    const x = (c + 0.5) / lterr.cols;
+    if (W.canStandAt(lterr, probe, x, 0.77)) { run++; if (run > best) best = run; } else run = 0;
+  }
+  if (best / lterr.cols > bigLandFrac) bigLandFrac = best / lterr.cols;
+}
+check('the land forms real continents (a long unbroken run of ground)', bigLandFrac > 0.45);
 
 /* ---------- summary ---------- */
 

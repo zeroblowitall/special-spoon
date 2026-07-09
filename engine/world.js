@@ -1864,8 +1864,8 @@
    * id, never stored, never merged. When worlds merge, travellers arrive
    * onto the host world's own land and settle on it. */
 
-  var TERRAIN_COLS = 120;
-  var TERRAIN_ROWS = 56;
+  var TERRAIN_COLS = 160;
+  var TERRAIN_ROWS = 74;
   var terrainCache = {};
 
   function valueNoise(rng, cols, rows, latW, latH) {
@@ -1901,15 +1901,17 @@
   function makeTerrain(worldId) {
     if (terrainCache[worldId]) return terrainCache[worldId];
     var rng = mulberry32(hash32(worldId + ':terrain'));
-    var broad = valueNoise(rng, TERRAIN_COLS, TERRAIN_ROWS);
-    var detail = valueNoise(rng, TERRAIN_COLS, TERRAIN_ROWS);
-    var fine = valueNoise(rng, TERRAIN_COLS, TERRAIN_ROWS);
+    // three octaves at real, different scales: broad continents, hills & bays,
+    // then fine coves — so the land has structure, not just noise
+    var broad = valueNoise(rng, TERRAIN_COLS, TERRAIN_ROWS, 3, 2);
+    var detail = valueNoise(rng, TERRAIN_COLS, TERRAIN_ROWS, 7, 4);
+    var fine = valueNoise(rng, TERRAIN_COLS, TERRAIN_ROWS, 15, 8);
     var heights = [];
     var min = Infinity, max = -Infinity;
     for (var r = 0; r < TERRAIN_ROWS; r++) {
       var line = [];
       for (var c = 0; c < TERRAIN_COLS; c++) {
-        var h = broad[r][c] * 0.6 + detail[r][c] * 0.28 + fine[r][c] * 0.12;
+        var h = broad[r][c] * 0.64 + detail[r][c] * 0.27 + fine[r][c] * 0.09;
         line.push(h);
         if (h < min) min = h;
         if (h > max) max = h;
@@ -2041,13 +2043,18 @@
     return stats;
   }
 
+  // Climate follows the realm's NATURE and the world's own seed — not the exact
+  // shape of its coastline. Keeping weather independent of the terrain heightmap
+  // means the land can be reshaped (bigger continents, finer coves) without
+  // shifting a single storm — which is what keeps the merge and the tests stable.
   function climateOf(worldId) {
-    var stats = terrainStats(worldId);
+    var realm = realmOf(worldId).realm;
     var rng = mulberry32(hash32(worldId + ':climate'));
+    var wet = (realm.wl[0] + realm.wl[1]) / 2; // ~0.16 (dry country) .. ~0.56 (sea)
     return {
-      storm: 0.05 + stats.high * 0.35 + rng() * 0.06,
-      rain: 0.12 + stats.water * 0.5,
-      mist: 0.05 + stats.water * 0.3,
+      storm: 0.05 + rng() * 0.3,
+      rain: 0.1 + wet * 0.6 + rng() * 0.05,
+      mist: 0.04 + wet * 0.35,
       breeze: 0.18
     };
   }
