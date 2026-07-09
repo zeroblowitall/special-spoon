@@ -931,6 +931,7 @@
       '<button class="btn" data-act="chronicle">Chronicle</button>' +
       '<button class="btn" data-act="lexicon">Lexicon</button>' +
       '<button class="btn" data-act="preserve">Preserve</button>' +
+      '<button class="btn" data-act="almanac" title="The Almanac">✦</button>' +
       '<button class="btn" data-act="worlds" title="Your worlds">⌂</button>' +
       '<button class="btn" data-act="mute" title="' + (audio.muted ? 'Sound is off' : 'Sound is on') + '">' + (audio.muted ? '🔇' : '🔊') + '</button>' +
       '<button class="btn" data-act="about">?</button>' +
@@ -1178,6 +1179,27 @@
         grammarLine +
         (lexRows || '<p class="muted">No words yet — the kith speak when their paths cross. Listen for the small words above their heads.</p>') +
         '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
+    } else if (openModal === 'almanac') {
+      var almanac = state.almanac || {};
+      var pages = W.almanacPages();
+      var visible = pages.filter(function (p) { return !p.sealed || almanac[p.id]; });
+      var writtenCount = visible.filter(function (p) { return almanac[p.id]; }).length;
+      var sealedWaiting = pages.some(function (p) { return p.sealed && !almanac[p.id]; });
+      var pageRows = visible.map(function (p) {
+        var fill = almanac[p.id];
+        if (fill) {
+          var when = new Date(fill.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+          return '<div class="almanac-page written"><span class="page-mark">✦</span> <strong>' + escapeHtml(p.title) + '</strong>' +
+            ' <span class="muted">· ' + when + (fill.note ? ' · ' + escapeHtml(fill.note) : '') + '</span></div>';
+        }
+        return '<div class="almanac-page faded"><span class="page-mark">·</span> <em>' + escapeHtml(p.riddle) + '</em></div>';
+      }).join('');
+      inner = '<h2>The Almanac</h2>' +
+        '<p class="muted">A book of pages that write themselves. Each is a riddle until this world makes it true — then it fills, and never unfills. ' +
+        writtenCount + ' of ' + visible.length + ' pages written.</p>' +
+        pageRows +
+        (sealedWaiting ? '<p class="muted" style="margin-top:0.9rem"><em>The book feels thicker than its pages.</em></p>' : '') +
+        '<div class="row"><button class="btn" data-act="close-modal">Close</button></div>';
     } else if (openModal === 'worlds') {
       var rows = listStoredWorlds().map(function (entry) {
         var current = entry.id === state.id;
@@ -1382,7 +1404,7 @@
           preserveWorld();
           render();
           toast('World preserved. The file you just downloaded IS your world — share copies freely.');
-        } else if (act === 'merge' || act === 'chronicle' || act === 'about' || act === 'worlds' || act === 'lexicon' || act === 'families') {
+        } else if (act === 'merge' || act === 'chronicle' || act === 'about' || act === 'worlds' || act === 'lexicon' || act === 'families' || act === 'almanac') {
           if (act === 'chronicle') chronicleShowAll = false;
           openModal = act; render();
         } else if (act === 'chronicle-all') {

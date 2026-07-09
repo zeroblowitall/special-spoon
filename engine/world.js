@@ -810,6 +810,189 @@
     });
   }
 
+  /* ---------- the almanac ----------
+   * A book of pages that write themselves. Each page is a riddle until the
+   * world makes it true; then it fills with the date and the names, and
+   * never unfills. Two pages are SEALED — invisible until the day they
+   * happen — so the game's best surprises stay surprises. */
+
+  function firstWhere(map, test) {
+    var ids = Object.keys(map).sort();
+    for (var i = 0; i < ids.length; i++) {
+      if (test(map[ids[i]])) return map[ids[i]];
+    }
+    return null;
+  }
+
+  var ALMANAC_PAGES = [
+    {
+      id: 'hand-seed', title: 'A seed by your hand', riddle: 'Put something into the ground yourself.',
+      test: function (w) { return !!firstWhere(w.plants, function (p) { return p.byHand; }); },
+      note: function (w) { var p = firstWhere(w.plants, function (p2) { return p2.byHand; }); return 'the ' + p.species; }
+    },
+    {
+      id: 'full-bloom', title: 'A bloom at its fullest', riddle: 'Wait for colour.',
+      test: function (w) { return !!firstWhere(w.plants, function (p) { return p.growth >= 1; }); },
+      note: function (w) { var p = firstWhere(w.plants, function (p2) { return p2.growth >= 1; }); return 'the ' + p.species; }
+    },
+    {
+      id: 'named-kith', title: 'A name, bestowed', riddle: 'Call one of them something only you would choose.',
+      test: function (w) { return !!firstWhere(w.kith, function (k) { return !!k.name; }); },
+      note: function (w) { return firstWhere(w.kith, function (k) { return !!k.name; }).name; }
+    },
+    {
+      id: 'emissary', title: 'An emissary blessed', riddle: 'Choose one to stand for this world.',
+      test: function (w) { return !!(w.emissary && w.kith[w.emissary]); },
+      note: function (w) { return kithLabel(w.kith[w.emissary]); }
+    },
+    {
+      id: 'fast-friends', title: 'Two who chose each other', riddle: 'Friendship is made of crossings.',
+      test: function (w) {
+        var alive = livingKith(w);
+        for (var i = 0; i < alive.length; i++) {
+          for (var j = i + 1; j < alive.length; j++) {
+            if ((alive[i].trust[alive[j].id] || 0) >= 0.5 && (alive[j].trust[alive[i].id] || 0) >= 0.5) return true;
+          }
+        }
+        return false;
+      }
+    },
+    {
+      id: 'child-born', title: 'A child of this world', riddle: 'Where trust and fair weather meet.',
+      test: function (w) { return !!firstWhere(w.kith, function (k) { return k.parents && k.origin !== 'merge'; }); },
+      note: function (w) { return firstWhere(w.kith, function (k) { return k.parents && k.origin !== 'merge'; }).given; }
+    },
+    {
+      id: 'full-days', title: 'A whole life, start to end', riddle: 'Some pages take a lifetime.',
+      test: function (w) { return !!firstWhere(w.kith, function (k) { return k.passed && k.span && k.passed === k.born + k.span * DAY; }); },
+      note: function (w) {
+        var k = firstWhere(w.kith, function (k2) { return k2.passed && k2.span && k2.passed === k2.born + k2.span * DAY; });
+        return kithLabel(k) + ', ' + k.span + ' days';
+      }
+    },
+    {
+      id: 'tribe', title: 'A tribe, self-named', riddle: 'Enough friendship becomes a people.',
+      test: function (w) { return tribesOf(w).length > 0; },
+      note: function (w) { var t = tribesOf(w)[0]; return t ? 'the ' + t.name : ''; }
+    },
+    {
+      id: 'one-word', title: 'A word on every tongue', riddle: 'Let them agree on something.',
+      test: function (w) {
+        var alive = livingKith(w);
+        if (alive.length < 3) return false;
+        var concepts = Object.keys(alive[0].lex || {});
+        for (var i = 0; i < concepts.length; i++) {
+          var c = concepts[i];
+          if (c === ':order') continue;
+          var word = alive[0].lex[c].word;
+          var everyone = alive.every(function (k) { return k.lex && k.lex[c] && k.lex[c].word === word; });
+          if (everyone) return true;
+        }
+        return false;
+      }
+    },
+    {
+      id: 'feeling-worded', title: 'A feeling put into words', riddle: 'Not just things — what things mean.',
+      test: function (w) {
+        return !!firstWhere(w.kith, function (k) {
+          return k.lex && Object.keys(k.lex).some(function (c) { return c.indexOf('mark:') === 0; });
+        });
+      }
+    },
+    {
+      id: 'craft-seed', title: 'The way of seed-keeping', riddle: 'A curious mind and a well-loved plant.',
+      test: function (w) { return !!firstWhere(w.kith, function (k) { return knowsOf(k).indexOf('seedkeeping') > -1; }); },
+      note: function (w) { return kithLabel(firstWhere(w.kith, function (k) { return knowsOf(k).indexOf('seedkeeping') > -1; })); }
+    },
+    {
+      id: 'craft-song', title: 'The first song', riddle: 'Some things are only found in storms.',
+      test: function (w) { return !!firstWhere(w.kith, function (k) { return knowsOf(k).indexOf('song') > -1; }); },
+      note: function (w) { return kithLabel(firstWhere(w.kith, function (k) { return knowsOf(k).indexOf('song') > -1; })); }
+    },
+    {
+      id: 'craft-shelter', title: 'A roof against the rain', riddle: 'Stubbornness, soaked through.',
+      test: function (w) { return !!firstWhere(w.kith, function (k) { return knowsOf(k).indexOf('shelter') > -1; }); },
+      note: function (w) { return kithLabel(firstWhere(w.kith, function (k) { return knowsOf(k).indexOf('shelter') > -1; })); }
+    },
+    {
+      id: 'craft-hearth', title: 'A fire kept alive', riddle: 'Warmth is a skill.',
+      test: function (w) { return !!firstWhere(w.kith, function (k) { return knowsOf(k).indexOf('hearth') > -1; }); },
+      note: function (w) { return kithLabel(firstWhere(w.kith, function (k) { return knowsOf(k).indexOf('hearth') > -1; })); }
+    },
+    {
+      id: 'village', title: 'A village', riddle: 'A fire, roofs around it, friends among them.',
+      test: function (w) { return w.chronicle.some(function (e) { return e.text.indexOf('first village') > -1; }); }
+    },
+    {
+      id: 'worlds-met', title: 'Worlds met', riddle: 'This world is not the only one.',
+      test: function (w) { return (w.lineage || []).length > 0; },
+      note: function (w) { return w.lineage[0] ? 'first: ' + w.lineage[0].name : ''; }
+    },
+    {
+      id: 'hybrid-plant', title: 'A bloom of two worlds', riddle: 'Some seeds need a meeting.',
+      test: function (w) { return !!firstWhere(w.plants, function (p) { return p.origin === 'merge'; }); },
+      note: function (w) { return 'the ' + firstWhere(w.plants, function (p) { return p.origin === 'merge'; }).species; }
+    },
+    {
+      id: 'wanderer-gift', title: 'A stranger, befriended', riddle: 'Be kind to those just passing through.',
+      test: function (w) {
+        return w.chronicle.some(function (e) {
+          return e.id.indexOf('wd') === 0 && (e.text.indexOf('taught') > -1 || e.text.indexOf('seed from elsewhere') > -1);
+        });
+      }
+    },
+    {
+      id: 'winter-weathered', title: 'A winter weathered', riddle: 'Endure the lean season.',
+      test: function (w) {
+        if (livingKith(w).length === 0) return false;
+        var now = env.now();
+        var firstIndex = seasonAt(w.born).index + 1;
+        var lastIndex = seasonAt(now).index - 1;
+        for (var i = firstIndex; i <= lastIndex && i < firstIndex + 400; i++) {
+          if (SEASONS[((i % 4) + 4) % 4] === 'winter') return true;
+        }
+        return false;
+      }
+    },
+    {
+      id: 'gardener-named', title: 'Your name, given', sealed: true,
+      test: function (w) { return !!w.gardenerNamed; },
+      note: function (w) { return '“' + w.gardenerNamed.word + '”, first spoken by ' + (w.kith[w.gardenerNamed.by] ? kithLabel(w.kith[w.gardenerNamed.by]) : 'one of them'); }
+    },
+    {
+      id: 'every-tongue', title: 'Your name on every tongue', sealed: true,
+      test: function (w) {
+        if (!w.gardenerNamed) return false;
+        var alive = livingKith(w);
+        return alive.length >= 3 && alive.every(function (k) { return k.lex && k.lex.gardener; });
+      },
+      note: function (w) { return '“' + w.gardenerNamed.word + '”'; }
+    }
+  ];
+
+  function almanacTick(w) {
+    if (!w.almanac) w.almanac = {};
+    var events = [];
+    ALMANAC_PAGES.forEach(function (page) {
+      if (w.almanac[page.id]) return;
+      var filled = false;
+      try { filled = page.test(w); } catch (e) { /* a page that cannot yet be read */ }
+      if (!filled) return;
+      var note = '';
+      try { note = page.note ? page.note(w) : ''; } catch (e) { /* let the date suffice */ }
+      w.almanac[page.id] = { at: env.now(), note: note };
+      bumpClock(w);
+      events.push({ kind: 'almanac', text: '✦ The Almanac wrote a page: “' + page.title + '”' + (note ? ' — ' + note : '') + '.' });
+    });
+    return events;
+  }
+
+  function almanacPages() {
+    return ALMANAC_PAGES.map(function (p) {
+      return { id: p.id, title: p.title, riddle: p.riddle || '', sealed: !!p.sealed };
+    });
+  }
+
   var WHISPER_COOLDOWN = 20 * 3600 * 1000;
 
   function whisperWord(w, concept, rawWord) {
@@ -2020,6 +2203,9 @@
       }
     });
 
+    /* -- and the almanac reads the world, and writes what it finds -- */
+    almanacTick(w).forEach(function (e) { events.push(e); });
+
     return events;
   }
 
@@ -2169,6 +2355,14 @@
     unionByU(w.kith, other.kith || {}, w.id, other.id);
     ensureStructures(w);
     unionByU(w.structures, other.structures || {}, w.id, other.id);
+    // almanac pages: the EARLIEST filling wins — a page written in either
+    // copy stays written, dated to whichever copy lived it first
+    if (!w.almanac) w.almanac = {};
+    Object.keys(other.almanac || {}).forEach(function (pid) {
+      if (!w.almanac[pid] || other.almanac[pid].at < w.almanac[pid].at) {
+        w.almanac[pid] = other.almanac[pid];
+      }
+    });
 
     var seen = {};
     w.chronicle.forEach(function (e) { seen[e.id] = true; });
@@ -2441,6 +2635,8 @@
     ensureStructures: ensureStructures,
     wandererDue: wandererDue,
     wandererTick: wandererTick,
+    almanacTick: almanacTick,
+    almanacPages: almanacPages,
     modernKithGenome: modernKithGenome,
     isSwimmer: isSwimmer,
     canStandAt: canStandAt,

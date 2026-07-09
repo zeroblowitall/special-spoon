@@ -1161,6 +1161,49 @@ W.kithTick(coldWorld, 2);
 check('an unbefriended stranger leaves only footprints',
   coldWorld.chronicle.some(e => e.id === 'wd' + visit.id && e.text.indexOf('footprints') > -1));
 
+/* ---------- 20i. the almanac ---------- */
+
+console.log('the almanac');
+const pageMeta = W.almanacPages();
+check('every page has its own name', new Set(pageMeta.map(p => p.id)).size === pageMeta.length);
+check('the sealed pages carry no riddle', pageMeta.filter(p => p.sealed).every(p => p.riddle === ''));
+check('there are sealed pages at all', pageMeta.some(p => p.sealed));
+
+const bookWorld = W.newWorld();
+W.almanacTick(bookWorld);
+check('a fresh world has empty pages', !bookWorld.almanac['hand-seed'] && !bookWorld.almanac['named-kith']);
+// the gardener plants; the page writes itself
+W.plantSeed(bookWorld);
+const fills = W.almanacTick(bookWorld);
+check('a page writes itself when the world makes it true', !!bookWorld.almanac['hand-seed']);
+check('the writing is announced', fills.some(e => e.kind === 'almanac' && e.text.indexOf('A seed by your hand') > -1));
+check('the page records what happened', bookWorld.almanac['hand-seed'].note.indexOf('the ') === 0);
+const firstAt = bookWorld.almanac['hand-seed'].at;
+hoursPass(5);
+W.almanacTick(bookWorld);
+check('a page never rewrites itself', bookWorld.almanac['hand-seed'].at === firstAt);
+
+// naming a kith fills its page
+W.nameKith(bookWorld, Object.keys(bookWorld.kith)[0], 'Pemberly');
+W.almanacTick(bookWorld);
+check('a bestowed name fills its page', bookWorld.almanac['named-kith'] && bookWorld.almanac['named-kith'].note === 'Pemberly');
+
+// sealed pages stay sealed until the day
+check('the sealed page is not yet written', !bookWorld.almanac['gardener-named']);
+bookWorld.gardenerNamed = { by: Object.keys(bookWorld.kith)[0], word: 'omu', at: fakeNow };
+W.almanacTick(bookWorld);
+check('the sealed page fills when its day comes', !!bookWorld.almanac['gardener-named'] &&
+  bookWorld.almanac['gardener-named'].note.indexOf('omu') > -1);
+
+// merges keep the EARLIEST filling
+const bookTwin = clone(bookWorld);
+bookTwin.almanac['hand-seed'] = { at: firstAt - 999999, note: 'the earlier telling' };
+bookTwin.clock += 1; // the twin lived a little — sync has something to carry
+const bookMerged = clone(bookWorld);
+W.mergeWorlds(bookMerged, clone(bookTwin));
+check('the earliest telling of a page wins the merge', bookMerged.almanac['hand-seed'].note === 'the earlier telling');
+check('pages already written are not lost to a merge', !!bookMerged.almanac['named-kith']);
+
 /* ---------- 21. song ---------- */
 
 console.log('song');

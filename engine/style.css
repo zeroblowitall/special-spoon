@@ -354,6 +354,17 @@ html, body {
   transform-origin: center;
 }
 
+/* The Almanac */
+.almanac-page {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.9rem;
+}
+.almanac-page .page-mark { color: var(--accent); display: inline-block; width: 1.1rem; }
+.almanac-page.faded { color: var(--ink-soft); opacity: 0.75; }
+.almanac-page.faded .page-mark { color: var(--ink-soft); }
+.almanac-page.written strong { font-family: Georgia, serif; }
+
 /* Toasts */
 #toast {
   position: absolute;
