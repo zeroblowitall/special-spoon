@@ -60,7 +60,7 @@ The plan: a distinct `engine/mind.js` module — a real "brain file" in the code
   - **The appropriate-to-enemy / appropriate-to-land defence TREE:** beyond the generic warding — palisades & watch-fires vs land beasts, staying-from-deep-water & lookouts vs drowners, fire vs cold-country packs, high-ground vs floods. Each invented under its own pressure, realm/enemy-specific.
   - **Social darkness:** feuds, a kith who turns to theft/sabotage/violence, the village's response (exile/reconciliation/a hero rises).
 - **Day 26 — The player as a force:** the stepped-up toolset & dialogue.
-- **Day 27 — World & villages:** bigger map, closer zoom, clearing-with-fire, 1–2 villages.
+- **Day 27 — World & villages (PARTLY SHIPPED):** DONE — a **graphics overhaul** of the land (Simon: "the world looks jagged and unfinished"): terrain now coloured by *smoothed* height with soft biome blends and an anti-jagged coastline (foam at the water's edge), higher-res paint, a framing vignette; **closer default camera** (the land fills the frame); and **villages made visible** (a cleared commons + the tribe's name on the map where a hearth has gathered a village). STILL DEFERRED to a Day 27b: a **genuinely larger land map** (more contiguous land / room to spread — deliberately not done yet to avoid changing identity-derived terrain shape and destabilising the sim), and **clearing-with-fire → farmland** (a kith burns a patch to make ground for gardens; a new mechanic). Also the appropriate-to-land defence tree (firebreaks, high-ground lore) still pending from Days 25–26.
 - **Day 28 — Rituals, myth & biographies; balance & playtest.**
 
 ## Decisions — ANSWERED 2026-07-09 (these are now settled; build to them)

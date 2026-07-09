@@ -147,15 +147,16 @@
     if (svg) svg.setAttribute('viewBox', camViewBox());
   }
 
-  // Default framing: the whole of the land in view, anchored to its base.
+  // Default framing: the land fills the frame, close and immersive, anchored
+  // to its base — a little sky, mostly world.
   function resetCam() {
     var aspect = viewAspect();
-    // want window height >= the land's 545 units and width >= 1010
-    var needZoomForHeight = (1000 * aspect) / 545;
-    cam.zoom = Math.max(CAM_MIN_ZOOM, Math.min(1, Math.min(needZoomForHeight, 1)));
+    // fill the land's ~530 units of height (plus a sliver of sky), zoomed in
+    var fillHeight = (1000 * aspect) / 560;
+    cam.zoom = Math.max(CAM_MIN_ZOOM, Math.min(1.35, fillHeight));
     var win = { w: 1000 / cam.zoom, h: (1000 / cam.zoom) * aspect };
     cam.cx = 500;
-    cam.cy = 1015 - win.h / 2; // land's base sits just inside the bottom edge
+    cam.cy = 1018 - win.h / 2; // land's base sits just inside the bottom edge
     clampCam();
   }
 
@@ -385,6 +386,22 @@
     return REALM_PAINT[W.realmOf(state.id).key] || REALM_PAINT.meadow;
   }
 
+  function smoothstep(t) { t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); }
+  function lerp3(a, b, t) {
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  }
+  // The land's colour as a SMOOTH function of height — beaches melt into
+  // meadow, meadow into rock, rock into peak — so no hard cell-edges show.
+  function landColorAt(paint, h, wl) {
+    var s = paint.shore, m = paint.meadow, rk = paint.rock, pk = paint.peak;
+    if (h < wl + 0.07) return lerp3(s, m, smoothstep((h - wl) / 0.07));
+    if (h < 0.66) return m.slice();
+    if (h < 0.73) return lerp3(m, rk, smoothstep((h - 0.66) / 0.07));
+    if (h < 0.82) return rk.slice();
+    if (h < 0.9) return lerp3(rk, pk, smoothstep((h - 0.82) / 0.08));
+    return pk.slice();
+  }
+
   var terrainImageCache = {};
 
   function terrainDataURL(worldId) {
@@ -392,7 +409,7 @@
     var terrain = W.makeTerrain(worldId);
     var paint = REALM_PAINT[W.realmOf(worldId).key] || REALM_PAINT.meadow;
     var canvas = document.createElement('canvas');
-    var CW = 840, CH = 448;
+    var CW = 1120, CH = 600;
     canvas.width = CW; canvas.height = CH;
     var ctx = canvas.getContext('2d');
     var img = ctx.createImageData(CW, CH);
@@ -418,40 +435,37 @@
       var wy = 0.55 + (py / CH) * ySpan;
       for (var px = 0; px < CW; px++) {
         var wx = px / CW;
-        var biome = W.biomeAt(terrain, wx, wy);
-        var base = paint[biome];
         var cell = heightSmooth(wx, wy);
-        var r = base[0], g = base[1], b = base[2];
+        var wl = terrain.waterline;
+        var col;
 
-        if (biome === 'deep' || biome === 'shallows') {
-          // water: darker with depth, a touch greener in the shallows
-          var depth = Math.max(0, terrain.waterline - cell);
-          r -= depth * 90; g -= depth * 55; b -= depth * 20;
-          if (biome === 'shallows') { g += 8; b += 6; }
+        if (cell < wl) {
+          // water: deep melts up into the shallows, and darkens with depth
+          col = lerp3(paint.deep, paint.shallows, smoothstep((cell - (wl - 0.14)) / 0.14));
+          var depth = wl - cell;
+          col[0] -= depth * 70; col[1] -= depth * 45; col[2] -= depth * 15;
         } else {
-          // relief: slopes facing the light (from the top of the map) glow;
-          // slopes falling away shade — smooth heights, no more banding
-          var north = heightSmooth(wx, Math.max(0.551, wy - 0.01));
-          var slope = (cell - north) * 260;
-          r += slope; g += slope; b += slope;
-          var lift = (cell - 0.5) * 26;
-          r += lift; g += lift; b += lift;
+          // land: a smooth blend of the biome bands, lit by the smoothed slope
+          col = landColorAt(paint, cell, wl);
+          var north = heightSmooth(wx, Math.max(0.551, wy - 0.008));
+          var shade = (cell - north) * 300 + (cell - 0.5) * 22;
+          col[0] += shade; col[1] += shade; col[2] += shade;
         }
 
-        // per-biome texture: grass tufts, sand ripples, rock speckle
+        // a soft line of foam right at the water's edge — the coast, unjagged
+        var dEdge = cell < wl ? wl - cell : cell - wl;
+        if (dEdge < 0.024) {
+          var f = 1 - dEdge / 0.024; f *= f * 0.5;
+          col[0] += (236 - col[0]) * f; col[1] += (241 - col[1]) * f; col[2] += (246 - col[2]) * f;
+        }
+
+        // a whisper of grain so the ground reads as ground, not plastic
         var n = (baseSeed ^ (px * 7919 + py * 104729)) >>> 0;
-        var grain = (n % 13) - 6;
-        if (biome === 'meadow' && n % 23 === 0) { g += 16; r -= 4; }          // tufts
-        else if (biome === 'shore' && n % 17 === 0) { r += 12; g += 10; }     // ripples
-        else if ((biome === 'rock' || biome === 'peak') && n % 11 === 0) {    // speckle
-          var fleck = (n % 2 === 0) ? 14 : -12;
-          r += fleck; g += fleck; b += fleck;
-        }
-
+        var grain = (n % 9) - 4;
         var i = (py * CW + px) * 4;
-        img.data[i] = Math.max(0, Math.min(255, r + grain));
-        img.data[i + 1] = Math.max(0, Math.min(255, g + grain));
-        img.data[i + 2] = Math.max(0, Math.min(255, b + grain));
+        img.data[i] = Math.max(0, Math.min(255, col[0] + grain));
+        img.data[i + 1] = Math.max(0, Math.min(255, col[1] + grain));
+        img.data[i + 2] = Math.max(0, Math.min(255, col[2] + grain));
         img.data[i + 3] = 255;
       }
     }
@@ -500,6 +514,26 @@
       '<stop offset="0" stop-color="' + sky[1] + '" stop-opacity="0.34"/>' +
       '<stop offset="1" stop-color="' + sky[1] + '" stop-opacity="0"/></linearGradient></defs>');
     svgParts.push('<rect x="-800" y="470" width="2600" height="180" fill="url(#haze)" pointer-events="none"/>');
+
+    // villages: where a hearth has gathered shelters and a people around it,
+    // a cleared commons and a name on the map
+    var villages = [];
+    Object.keys(state.structures || {}).forEach(function (id) {
+      var h = state.structures[id];
+      if (h.type !== 'hearth') return;
+      var vc = null;
+      for (var ci = 0; ci < state.chronicle.length; ci++) {
+        if (state.chronicle[ci].id === 'v' + h.id) { vc = state.chronicle[ci]; break; }
+      }
+      if (!vc) return;
+      var m = /and the (.+?) live among/.exec(vc.text);
+      villages.push({ x: h.x, y: h.y, name: m ? m[1] : 'a village' });
+    });
+    villages.forEach(function (v) {
+      var vp = toScreen(v.x, v.y);
+      svgParts.push('<ellipse class="village-commons" cx="' + vp.x.toFixed(1) + '" cy="' + (vp.y + 5).toFixed(1) + '" rx="60" ry="21"/>');
+    });
+
     var hour = new Date().getHours();
     if (hour >= 21 || hour < 5) {
       svgParts.push('<circle cx="840" cy="110" r="34" fill="#f4f1de" opacity="0.9"/>' +
@@ -512,6 +546,10 @@
     var structures = Object.keys(state.structures || {}).map(function (id) { return state.structures[id]; });
     structures.sort(function (a, b) { return a.y - b.y; });
     structures.forEach(function (s) { svgParts.push(drawStructure(s)); });
+    villages.forEach(function (v) {
+      var vp = toScreen(v.x, v.y);
+      svgParts.push('<text class="village-name" x="' + vp.x.toFixed(1) + '" y="' + (vp.y - 30).toFixed(1) + '">' + escapeHtml(v.name) + '</text>');
+    });
     if (beacon && vnow() < beacon.until) {
       var bpos = toScreen(beacon.x, beacon.y);
       svgParts.push('<g class="beckon" transform="translate(' + bpos.x.toFixed(1) + ' ' + bpos.y.toFixed(1) + ')">' +
@@ -568,6 +606,10 @@
     }
     var disNow = W.disasterAt(state.id, vnow());
     svgParts.push(drawDisaster(disNow));
+    // a soft vignette frames the land and gives it depth
+    svgParts.push('<defs><radialGradient id="vign" cx="0.5" cy="0.54" r="0.72">' +
+      '<stop offset="0.62" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.26"/></radialGradient></defs>' +
+      '<rect x="0" y="470" width="1000" height="530" fill="url(#vign)" pointer-events="none"/>');
     var disClass = disNow ? ' cata-active cata-' + disNow.visual + ' cata-' + disNow.phase : '';
 
     stage.innerHTML =
