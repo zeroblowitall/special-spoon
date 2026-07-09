@@ -542,10 +542,12 @@
       svgParts.push('<circle cx="840" cy="110" r="40" fill="#ffd166" opacity="0.85"/>');
     }
 
-    plants.forEach(function (p) { svgParts.push(drawPlant(p)); });
     var structures = Object.keys(state.structures || {}).map(function (id) { return state.structures[id]; });
     structures.sort(function (a, b) { return a.y - b.y; });
-    structures.forEach(function (s) { svgParts.push(drawStructure(s)); });
+    // fields are ground — drawn under the garden that grows in them
+    structures.forEach(function (s) { if (s.type === 'field') svgParts.push(drawStructure(s)); });
+    plants.forEach(function (p) { svgParts.push(drawPlant(p)); });
+    structures.forEach(function (s) { if (s.type !== 'field') svgParts.push(drawStructure(s)); });
     villages.forEach(function (v) {
       var vp = toScreen(v.x, v.y);
       svgParts.push('<text class="village-name" x="' + vp.x.toFixed(1) + '" y="' + (vp.y - 30).toFixed(1) + '">' + escapeHtml(v.name) + '</text>');
@@ -739,6 +741,19 @@
     var pos = toScreen(s.x, s.y);
     var scale = 0.85 + (s.y - 0.55) * 0.9;
     var parts = [];
+    if (s.type === 'field') {
+      // a tilled plot: dark broken earth with furrow rows
+      var rows = [];
+      for (var fr = 0; fr < 5; fr++) {
+        var fy = -6 + fr * 3;
+        rows.push('<line x1="-26" y1="' + fy + '" x2="26" y2="' + fy + '" stroke="#6a4a2c" stroke-width="1.4" opacity="0.75"/>');
+      }
+      return '<g class="structure field" transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) +
+        ') scale(' + scale.toFixed(2) + ')">' +
+        '<ellipse cx="0" cy="0" rx="30" ry="12" fill="#5a3c22" opacity="0.72"/>' +
+        '<ellipse cx="0" cy="0" rx="30" ry="12" fill="none" stroke="#3d2814" stroke-width="1.5"/>' +
+        rows.join('') + '</g>';
+    }
     if (s.type === 'leanto') {
       // two leaning walls, a dark doorway, a straw ridge
       parts.push('<ellipse cx="0" cy="1.5" rx="11" ry="3" fill="rgba(0,0,0,0.22)"/>');

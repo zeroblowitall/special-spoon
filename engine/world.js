@@ -577,7 +577,9 @@
     ensureStructures(w);
     var sid = (type === 'hearth' ? 'h' : 'st') + hash32(k.id + ':build:' + type + ':' + dayBucket).toString(16);
     if (w.structures[sid]) return null; // today's work is already done
-    if (Object.keys(w.structures).length >= STRUCT_CAP) return null;
+    var builtCount = 0;
+    Object.keys(w.structures).forEach(function (id) { if (w.structures[id].type !== 'field') builtCount++; });
+    if (builtCount >= STRUCT_CAP) return null; // fields don't count against shelters
     var terrain = makeTerrain(w.id);
     if (!isLandAt(terrain, k.x, k.y)) return null;
     var s = {
@@ -627,7 +629,27 @@
     if (!stock) return null;
     var rng = mulberry32(hash32(plantId));
     var terrain = makeTerrain(w.id);
-    var spot = isSoilAt(terrain, k.x, k.y) ? { x: k.x, y: k.y } : findSpot(w, 'garden:' + plantId, isSoilAt);
+    // a gardener plants in a cleared field if one is near — ash-rich tilled
+    // ground where the garden grows faster. Placement uses its own seed so the
+    // seed's GENOME never depends on whether a field happened to be there.
+    var field = null, fieldD = 0.2;
+    Object.keys(w.structures || {}).forEach(function (id) {
+      var s = w.structures[id];
+      if (s.type !== 'field') return;
+      var d = Math.sqrt((s.x - k.x) * (s.x - k.x) + (s.y - k.y) * (s.y - k.y));
+      if (d < fieldD) { fieldD = d; field = s; }
+    });
+    var spot, soil;
+    if (field) {
+      var frng = mulberry32(hash32(plantId + ':field'));
+      var fx = field.x + (frng() - 0.5) * 0.05, fy = field.y + (frng() - 0.5) * 0.04;
+      if (!isSoilAt(terrain, fx, fy)) { fx = field.x; fy = field.y; }
+      spot = { x: fx, y: fy };
+      soil = Math.max(1.5, (BIOMES[biomeAt(terrain, fx, fy)].fertility || 1) * 1.6);
+    } else {
+      spot = isSoilAt(terrain, k.x, k.y) ? { x: k.x, y: k.y } : findSpot(w, 'garden:' + plantId, isSoilAt);
+      soil = BIOMES[biomeAt(terrain, spot.x, spot.y)].fertility;
+    }
     var genome = crossGenomes(rng, modernGenome(stock.genome), modernGenome(stock.genome), PLANT_GENE_SPEC);
     var plant = {
       id: plantId,
@@ -635,7 +657,7 @@
       name: null,
       genome: genome,
       x: spot.x, y: spot.y,
-      soil: BIOMES[biomeAt(terrain, spot.x, spot.y)].fertility,
+      soil: soil,
       planted: env.now(),
       tick: env.now(),
       growth: 0,
@@ -646,8 +668,41 @@
     };
     w.plants[plantId] = plant;
     chronicle(w, 'plant', kithLabel(k) + ' planted a ' + species + ' seed in the ' +
-      realmBiome(w.id, biomeAt(terrain, spot.x, spot.y)) + '. The garden grows itself now.', 'gp' + plantId);
+      realmBiome(w.id, biomeAt(terrain, spot.x, spot.y)) + (field ? '’s new field' : '') + '. The garden grows itself now.', 'gp' + plantId);
     return plant;
+  }
+
+  /* ---------- clearing with fire: fields ----------
+   * A seasoned gardener learns to open new ground the old way: a careful fire
+   * clears a patch of wild growth, and the ash-rich earth beneath becomes a
+   * field — tilled ground where the garden grows faster and thicker. Fields
+   * are world content (deterministic id per gardener per day), so drifted
+   * copies clear the same fields and reconcile on merge like any structure. */
+
+  var FIELD_CAP = 6;
+
+  function clearField(w, k, dayBucket) {
+    ensureStructures(w);
+    var fid = 'fld' + hash32(k.id + ':field:' + dayBucket).toString(16);
+    if (w.structures[fid]) return null; // today's clearing is done
+    var fieldCount = 0;
+    Object.keys(w.structures).forEach(function (id) { if (w.structures[id].type === 'field') fieldCount++; });
+    if (fieldCount >= FIELD_CAP) return null;
+    var terrain = makeTerrain(w.id);
+    if (!isSoilAt(terrain, k.x, k.y)) return null; // fields need good ground
+    // the fire clears the wild growth in the patch — burned back to the root
+    Object.keys(w.plants).forEach(function (pid) {
+      var p = w.plants[pid];
+      if (p.byHand) return; // spare the gardener's own careful plantings
+      if (Math.abs(p.x - k.x) < 0.06 && Math.abs(p.y - k.y) < 0.06) {
+        p.growth = 0; p.planted = env.now(); p.tick = env.now(); p.burned = env.now(); p.u = bumpClock(w);
+      }
+    });
+    var field = { id: fid, type: 'field', x: k.x, y: k.y, by: k.id, built: env.now(), start: env.now(), u: bumpClock(w) };
+    w.structures[fid] = field;
+    chronicle(w, 'discovery', kithLabel(k) + ' set a careful fire, cleared a patch of ground, and broke the ash-rich earth beneath. ' +
+      'A field is opened in the ' + realmBiome(w.id, biomeAt(terrain, k.x, k.y)) + '.', 'cf' + fid);
+    return field;
   }
 
   /* ---------- kinds: speciation you can see ----------
@@ -1684,9 +1739,11 @@
   var TERRAIN_ROWS = 56;
   var terrainCache = {};
 
-  function valueNoise(rng, cols, rows) {
-    // coarse random lattice, sampled with smooth bilinear interpolation
-    var latticeW = 7, latticeH = 4;
+  function valueNoise(rng, cols, rows, latW, latH) {
+    // a random lattice sampled with smooth bilinear interpolation. The lattice
+    // size sets the FREQUENCY: a small lattice makes broad continents, a large
+    // one makes fine coves — summed, they make fractal, believable land.
+    var latticeW = latW || 7, latticeH = latH || 4;
     var lattice = [];
     for (var i = 0; i <= latticeH; i++) {
       var row = [];
@@ -2424,7 +2481,7 @@
         } else {
           k.intent = 'asleep'; k.drive = 'rest';
           // safe sleep mends faster: a roof, a hearth, or kin close by
-          var sheltered = structList.some(function (s) { return structDist(s, k.x, k.y) < 0.09; });
+          var sheltered = structList.some(function (s) { return s.type !== 'field' && structDist(s, k.x, k.y) < 0.09; });
           k.energy = Math.min(1, k.energy + ENERGY_DECAY_PER_SEC * (sheltered ? 3 : 1.4) * dt);
           // dreams: a remembered word murmured into the dark
           if (rng() < 0.04) {
@@ -2514,6 +2571,7 @@
         // else a safe spot underfoot — and sleep. The boldest roam the dark.
         var bed = null, bedD = 0.4;
         structList.forEach(function (s) {
+          if (s.type === 'field') return; // you don't bed down in a ploughed field
           var d = structDist(s, k.x, k.y);
           if (d < bedD) { bedD = d; bed = s; }
         });
@@ -2821,6 +2879,19 @@
       if (knowsOf(k).indexOf('seedkeeping') > -1 && k.energy > 0.5 && rng() < 0.06) {
         keeperPlant(w, k, dayBucket);
       }
+      // a seasoned gardener opens new ground with fire — a field. Rolled on its
+      // own seed (world+day+kith) so it never perturbs the shared tick stream.
+      if (knowsOf(k).indexOf('seedkeeping') > -1 && k.energy > 0.6 && k.brain.wanderlust > 0.45) {
+        if (mulberry32(hash32(w.id + ':fieldroll:' + dayBucket + ':' + k.id))() < 0.02) {
+          var nearField = Object.keys(w.structures || {}).some(function (id) {
+            var s = w.structures[id]; return s.type === 'field' && structDist(s, k.x, k.y) < 0.16;
+          });
+          if (!nearField) {
+            var newField = clearField(w, k, dayBucket);
+            if (newField) events.push({ kind: 'discovery', text: kithLabel(k) + ' cleared a field with fire — new ground for the garden.' });
+          }
+        }
+      }
     });
 
     /* -- the warding: after a killing, a bold and caring soul stops sleeping
@@ -2886,6 +2957,7 @@
     /* -- a raising, finished: the day the roof or the fire is done. Told once,
      * identically in every copy (progress is time, not tick-count) -- */
     structList.forEach(function (s) {
+      if (s.type === 'field') return; // a field opens at once; it does not "rise"
       if (s.start == null || structRaised(s, now) < 1) return;
       var doneId = 'sc' + s.id;
       if (w.chronicle.some(function (e) { return e.id === doneId; })) return;
@@ -2906,7 +2978,7 @@
       var villageId = 'v' + hearth.id;
       if (w.chronicle.some(function (e) { return e.id === villageId; })) return;
       var ring = structList.filter(function (s) {
-        return s.id !== hearth.id && structDist(s, hearth.x, hearth.y) < 0.15;
+        return s.type === 'leanto' && structDist(s, hearth.x, hearth.y) < 0.15;
       });
       if (ring.length < 2) return;
       var tribeHere = tribesOf(w).filter(function (tribe) {
@@ -3365,6 +3437,7 @@
     greetNewKind: greetNewKind,
     skillName: skillName,
     buildStructure: buildStructure,
+    clearField: clearField,
     ensureStructures: ensureStructures,
     structRaised: structRaised,
     BUILD_MS: BUILD_MS,

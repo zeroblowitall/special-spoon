@@ -1491,6 +1491,43 @@ check('reunited copies hold one finished-telling, not two',
   mergedRise.chronicle.filter(e => e.id === 'sc' + raising.id).length === 1);
 fakeNow = savedRiseNow;
 
+/* ---------- 26b. clearing with fire: fields ---------- */
+
+console.log('fields');
+const fieldWorld = W.newWorld();
+const gardener = Object.values(fieldWorld.kith)[0];
+W.learn(fieldWorld, gardener, 'seedkeeping');
+// place the gardener on good soil (a planted seed always lands on soil)
+const soilSeed = W.plantSeed(fieldWorld);
+const fspot = { x: soilSeed.x, y: soilSeed.y };
+gardener.x = fspot.x; gardener.y = fspot.y;
+const fDay = Math.floor(fakeNow / (24 * 3600 * 1000));
+const field = W.clearField(fieldWorld, gardener, fDay);
+check('a gardener clears a field with fire', !!field && field.type === 'field');
+check('the clearing is chronicled', fieldWorld.chronicle.some(e => e.id === 'cf' + field.id));
+check('one field per gardener per day', W.clearField(fieldWorld, gardener, fDay) === null);
+check('a field is not a shelter (it does not shelter or house a village)', field.type === 'field');
+// determinism: the same field in every copy
+const fldC1 = clone(fieldWorld), fldC2 = clone(fieldWorld);
+[fldC1, fldC2].forEach(w => { delete w.structures; });
+const fldG1 = Object.values(fldC1.kith)[0], fldG2 = Object.values(fldC2.kith)[0];
+fldG1.x = fldG2.x = fspot.x; fldG1.y = fldG2.y = fspot.y;
+const fldA = W.clearField(fldC1, fldG1, fDay + 1), fldB = W.clearField(fldC2, fldG2, fDay + 1);
+check('the same field is cleared in every copy', !!fldA && !!fldB && fldA.id === fldB.id);
+// a field grows a richer garden: keeperPlant into a field boosts fertility
+gardener.taste = { fernbloom: 0.8 };
+fieldWorld.plants['stockp'] = { id: 'stockp', species: 'fernbloom', genome: { form: 'puff', hue: 100, size: 0.6, aspect: 1, detail: 3, glow: false, rate: 1 }, x: 0.5, y: 0.7, soil: 1, growth: 1, planted: fakeNow, tick: fakeNow, u: 1 };
+const gardenPlant = W.keeperPlant(fieldWorld, gardener, fDay + 5);
+check('the gardener plants into the field', !!gardenPlant);
+check('field ground is richer than wild ground', gardenPlant && gardenPlant.soil >= 1.5);
+// merge: reunited copies hold one field, not two
+const fMergeA = clone(fldC1), fMergeB = clone(fldC2);
+fMergeB.touched = fMergeA.touched = fakeNow;
+const fMerged = clone(fMergeA);
+W.mergeWorlds(fMerged, clone(fMergeB));
+check('reunited copies hold one field, not two',
+  Object.keys(fMerged.structures).filter(id => id === fldA.id).length === 1);
+
 /* ---------- 27. expeditions beyond the edge ---------- */
 
 console.log('expeditions');
