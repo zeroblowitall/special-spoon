@@ -352,6 +352,11 @@ html, body {
   stroke-dasharray: 5 6;
   pointer-events: none;
 }
+/* Illness: a fever-mark wavers over the sick (opacity only, so the mark's
+ * own positioning transform is never overridden) */
+.kith-sick path { animation: sickWaver 2.2s ease-in-out infinite; }
+@keyframes sickWaver { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.95; } }
+
 .village-name {
   font-family: Georgia, serif;
   font-size: 15px;
@@ -536,7 +541,7 @@ html, body {
 <p><strong>On a phone?</strong> Your device probably opened this file in a built-in viewer that doesn't run JavaScript. Save the file, then open it with a real browser: in your Files app, long-press the file and choose <em>Open with → Chrome</em> (or Firefox). The world will be waiting.</p>
 </div></noscript>
 <div id="stage"></div>
-<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.27.0 */;</script>
+<script id="dg-state">window.DRIFT_STATE = null /* driftgarden v0.28.0 */;</script>
 <script id="dg-mind">
 /* Driftgarden — the mind.
  * A kith's inner life: the pressures that push on it, the trait-weighted way
@@ -1217,7 +1222,8 @@ html, body {
     song: 'the song',
     shelter: 'the craft of shelter',
     hearth: 'the keeping of hearths',
-    ward: 'the warding'
+    ward: 'the warding',
+    tending: 'the tending of the sick'
   };
 
   /* ---------- structures: what society raises ----------
@@ -1645,7 +1651,7 @@ html, body {
   // (traits, stage, standing, span), so every copy would pick the same soul.
   function expeditionCandidates(w, now, back) {
     return livingKith(w).filter(function (k) {
-      if (k.wanderer || k.expedition || k.passed || k.departed) return false;
+      if (k.wanderer || k.expedition || k.passed || k.departed || k.sick) return false;
       if (w.emissary === k.id) return false; // the emissary stays for the meeting-stone
       if (kithStage(k, now) !== 'grown') return false; // the young and the old stay home
       if ((k.born + (k.span || 16) * DAY) <= back) return false; // must outlast the journey
@@ -2111,6 +2117,134 @@ html, body {
       }
     }
     return best;
+  }
+
+  /* ---------- illness: a sickness among the folk ----------
+   * Now and then a sickness rises in a world and runs through the folk. It
+   * does not travel by chance encounter (that would drift between copies) but
+   * along the BOND GRAPH — you take it from those you are closest to, your
+   * friends and your kin — which is merged content, so every copy suffers the
+   * same outbreak, the same spread, the same losses, at the same hours.
+   *
+   * Each infection has a seeded incubation and a seeded course; a sick kith
+   * recovers (and is then immune) or dies, its fate softened if a friend who
+   * knows the TENDING sits with it. All of it derives from the plague's id,
+   * the kith's id, and the trust between them — no randomness of the moment. */
+
+  var PLAGUE_PERIOD = 15 * DAY;
+  var PLAGUES = [
+    { name: 'a shivering fever', verb: 'a fever ran through' },
+    { name: 'the grey cough', verb: 'a hard cough spread among' },
+    { name: 'a wasting sickness', verb: 'a wasting took hold of' },
+    { name: 'the heavy sleep', verb: 'a sickness of sleep crept over' }
+  ];
+
+  function plagueDue(worldId, t) {
+    var period = Math.floor(t / PLAGUE_PERIOD);
+    var rng = mulberry32(hash32(worldId + ':plague:' + period));
+    if (rng() >= 0.3) return null; // most seasons the folk stay hale
+    var kind = PLAGUES[Math.floor(rng() * PLAGUES.length)];
+    var start = period * PLAGUE_PERIOD + Math.floor(rng() * 10 * DAY);
+    return {
+      id: 'plg' + hash32(worldId + ':plague:' + period).toString(16),
+      name: kind.name, verb: kind.verb, start: start, period: period
+    };
+  }
+
+  function plagueContagious(id, from, to) { return mulberry32(hash32(id + ':inf:' + from + ':' + to))() < 0.55; }
+  function plagueIncubation(id, from, to) { return (0.5 + mulberry32(hash32(id + ':inc:' + from + ':' + to))() * 2.5) * DAY; }
+  function plagueDuration(id, kid) { return (3 + mulberry32(hash32(id + ':dur:' + kid))() * 4) * DAY; }
+  function plagueLethal(k, id, tended) {
+    var base = 0.32;
+    var st = kithStage(k, k.sick.since);
+    if (st === 'young' || st === 'elder') base += 0.2;   // the young and old are frailer
+    base -= k.brain.boldness * 0.1;                       // the hardy throw it off
+    if (tended) base -= 0.28;                             // a tended kith is far likelier to live
+    return mulberry32(hash32(id + ':fate:' + k.id))() < base;
+  }
+  // Does a living, well friend who knows the tending sit with this one?
+  function plagueTended(w, k) {
+    return livingKith(w).some(function (o) {
+      return o.id !== k.id && !o.sick && (k.trust[o.id] || 0) >= 0.5 && knowsOf(o).indexOf('tending') > -1;
+    });
+  }
+  // The first to take it — chosen from content, so every copy names the same.
+  function plaguePatientZero(w, due, present) {
+    var pool = present.filter(function (k) { return !k.sick && (k.hadPlague || []).indexOf(due.id) === -1; });
+    if (!pool.length) return null;
+    pool.sort(function (a, b) {
+      var sa = (1 - a.brain.boldness) * 0.3 + (hash32(due.id + a.id) % 1000) / 1000;
+      var sb = (1 - b.brain.boldness) * 0.3 + (hash32(due.id + b.id) % 1000) / 1000;
+      return sb - sa || (a.id < b.id ? -1 : 1);
+    });
+    return pool[0];
+  }
+
+  function plagueTick(w, now, events) {
+    var due = plagueDue(w.id, now);
+    if (!due || now < due.start) return;
+    var present = presentKith(w);
+    var active = w.chronicle.some(function (e) { return e.id === 'pl' + due.id; });
+    // a sickness needs a CROWD to break out — but once it has, it must run its
+    // course even as the folk thin, or the last sick would never resolve
+    if (!active && present.length < 5) return;
+
+    // outbreak: the first to take it
+    if (!active) {
+      var zero = plaguePatientZero(w, due, present);
+      if (!zero) return;
+      zero.sick = { id: due.id, since: due.start, name: due.name };
+      zero.u = bumpClock(w);
+      var outText = due.verb.charAt(0).toUpperCase() + due.verb.slice(1) + ' the folk of ' + w.name +
+        '. ' + kithLabel(zero) + ' is the first to take ' + due.name + '.';
+      chronicle(w, 'plague', outText, 'pl' + due.id);
+      events.push({ kind: 'plague', text: outText });
+    }
+
+    // spread along the bonds — you take it from those closest to you
+    present.filter(function (k) { return k.sick && k.sick.id === due.id; }).forEach(function (s) {
+      Object.keys(s.trust || {}).forEach(function (bid) {
+        if ((s.trust[bid] || 0) < 0.5) return;
+        var b = w.kith[bid];
+        if (!b || !isAlive(b) || b.expedition || b.sick || (b.hadPlague || []).indexOf(due.id) > -1) return;
+        if (!plagueContagious(due.id, s.id, b.id)) return;
+        var at = s.sick.since + plagueIncubation(due.id, s.id, b.id);
+        if (now >= at) { b.sick = { id: due.id, since: at, name: due.name }; b.u = bumpClock(w); }
+      });
+    });
+
+    // the course of the illness: recover (and be immune), or be lost
+    present.forEach(function (k) {
+      if (!k.sick || k.sick.id !== due.id) return;
+      var at = k.sick.since + plagueDuration(due.id, k.id);
+      if (now < at) return;
+      var tended = plagueTended(w, k);
+      k.hadPlague = (k.hadPlague || []).concat([due.id]);
+      if (plagueLethal(k, due.id, tended)) {
+        k.passed = at;
+        if (w.emissary === k.id) w.emissary = null;
+        k.u = bumpClock(w);
+        var dText = kithLabel(k) + ' could not throw off ' + due.name + ', and fell asleep beneath the soil.';
+        chronicle(w, 'passing', dText, 'pz' + due.id + k.id);
+        events.push({ kind: 'passing', text: dText });
+      } else {
+        k.sick = null;
+        k.u = bumpClock(w);
+      }
+    });
+
+    // burn-out: when none are sick and the sickness has run its course
+    if (!w.chronicle.some(function (e) { return e.id === 'pp' + due.id; })) {
+      var anySick = livingKith(w).some(function (k) { return k.sick && k.sick.id === due.id; });
+      var anyResolved = livingKith(w).some(function (k) { return (k.hadPlague || []).indexOf(due.id) > -1; }) ||
+        w.chronicle.some(function (e) { return e.id.indexOf('pz' + due.id) === 0; });
+      if (!anySick && anyResolved) {
+        var passText = due.name.charAt(0).toUpperCase() + due.name.slice(1) +
+          ' has passed out of ' + w.name + '. Those it spared carry its memory in their blood, and will not take it again.';
+        chronicle(w, 'plague', passText, 'pp' + due.id);
+        events.push({ kind: 'plague', text: passText });
+      }
+    }
   }
 
   /* ---------- the almanac ----------
@@ -3040,6 +3174,7 @@ html, body {
     expeditionTick(w, now, events);
     predatorTick(w, now, events);
     disasterTick(w, now, events);
+    plagueTick(w, now, events);
     var terrain = makeTerrain(w.id);
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
     var wxNow = weatherAt(w.id, now);
@@ -3064,6 +3199,7 @@ html, body {
         return s.type === 'leanto' && structDist(s, k.x, k.y) < 0.07;
       })) decayMul = 0.6; // a roof is worth more than a rock
       if (k.act === 'sleep') decayMul = 0; // the sleeping do not tire; they mend
+      if (k.sick) decayMul += 0.4; // the sick burn low and tire fast
       var decay = ENERGY_DECAY_PER_SEC * decayMul * dt;
       k.energy = Math.max(0, k.energy - decay);
       if (k.energy <= 0 && !k.starving) k.starving = now;
@@ -3087,6 +3223,7 @@ html, body {
         k.goal = 'make';
         k.intent = rising.type === 'hearth' ? 'tending the new hearth' : 'raising the lean-to';
       }
+      if (k.sick) { k.intent = 'unwell — low and slow'; k.drive = 'rest'; k.goal = 'rest'; }
       // the country turns on the folk: drop everything and run for high ground.
       // This is real to watch, but WHO lives is decided by content at the
       // strike, not by where the running left them.
@@ -3379,7 +3516,8 @@ html, body {
           var limbSpeed = [0.8, 1, 1.15][k.genome.limbs || 0] || 1;
           var inWater = !isLandAt(terrain, k.x, k.y);
           var mediumSpeed = inWater ? 1.25 : 1; // a swimmer glides
-          var step = Math.min(dist, k.genome.speed * stageSpeed * limbSpeed * mediumSpeed * dt);
+          var sickSpeed = k.sick ? 0.6 : 1;      // the sick drag their feet
+          var step = Math.min(dist, k.genome.speed * stageSpeed * limbSpeed * mediumSpeed * sickSpeed * dt);
           var walk = walkLine(terrain, k, k.x, k.y, dx / dist, dy / dist, step);
           if (walk.moved > 0) {
             k.x = walk.x; k.y = walk.y;
@@ -3475,8 +3613,8 @@ html, body {
           }
         }
 
-        // courting: two bonded, hale, grown kith in fair weather
-        if (!storm && ka.trust[kb.id] >= 0.5 && kb.trust[ka.id] >= 0.5 &&
+        // courting: two bonded, hale, grown kith in fair weather (never the sick)
+        if (!storm && !ka.sick && !kb.sick && ka.trust[kb.id] >= 0.5 && kb.trust[ka.id] >= 0.5 &&
             ka.energy > 0.65 && kb.energy > 0.65 &&
             kithStage(ka, now) === 'grown' && kithStage(kb, now) === 'grown') {
           var birth = birthChild(w, ka, kb, dayBucket);
@@ -3587,6 +3725,22 @@ html, body {
           'and to teach the others to stand together when the dark comes. It knows the warding now.';
         chronicle(w, 'discovery', wardText, 'dw' + k.id);
         events.push({ kind: 'discovery', text: wardText });
+      });
+    }
+
+    /* -- the tending: when a sickness comes, a caring, patient soul learns to
+     * sit with the sick, which leaves ease the fever, and teaches the others.
+     * Rolled on its own seed so it never perturbs the shared tick stream. -- */
+    if (w.chronicle.some(function (e) { return e.kind === 'plague'; })) {
+      alive.forEach(function (k) {
+        if (knowsOf(k).indexOf('tending') > -1) return;
+        if (k.brain.sociability <= 0.6 || k.brain.patience <= 0.55) return;
+        if (mulberry32(hash32(w.id + ':tendroll:' + dayBucket + ':' + k.id))() >= 0.03) return;
+        learn(w, k, 'tending');
+        var tText = kithLabel(k) + ' sat with the sick through the long nights, learned which leaves bring a fever down, ' +
+          'and taught the others. It knows the tending of the sick now.';
+        chronicle(w, 'discovery', tText, 'dte' + k.id);
+        events.push({ kind: 'discovery', text: tText });
       });
     }
 
@@ -4128,6 +4282,8 @@ html, body {
     disasterDue: disasterDue,
     disasterAt: disasterAt,
     disasterTick: disasterTick,
+    plagueDue: plagueDue,
+    plagueTick: plagueTick,
     presentKith: presentKith,
     almanacTick: almanacTick,
     almanacPages: almanacPages,
@@ -5105,8 +5261,10 @@ html, body {
     var stage = W.kithStage(k, now);
     var scale = g.size * (stage === 'young' ? 0.65 : 1) * (0.85 + (k.y - 0.55) * 0.9);
     var sat = stage === 'elder' ? 30 : 60;
-    var body = 'hsl(' + g.hue + ', ' + sat + '%, 58%)';
-    var pale = 'hsl(' + g.hue + ', ' + sat + '%, 74%)';
+    if (k.sick) sat = Math.round(sat * 0.4); // the sick go pale and grey
+    var light = k.sick ? 52 : 58;
+    var body = 'hsl(' + g.hue + ', ' + sat + '%, ' + light + '%)';
+    var pale = 'hsl(' + g.hue + ', ' + sat + '%, ' + (light + 16) + '%)';
     var deep = 'hsl(' + g.hue + ', ' + Math.max(25, sat - 10) + '%, 42%)';
     var sel = selected && selected.type === 'kith' && selected.id === k.id;
     var emissary = state.emissary === k.id;
@@ -5249,8 +5407,13 @@ html, body {
     // a sleeping "z" — always present, shown only by the act-sleep class so
     // the cheap incremental update can reveal it without a full re-render
     var zSvg = '<text class="kith-z" x="' + (rx * scale + 2).toFixed(0) + '" y="' + (-(-top + 4) * scale).toFixed(0) + '">z</text>';
+    // a fever-mark hangs over the sick — three faint wavering lines of heat
+    var sickSvg = k.sick
+      ? '<g class="kith-sick" transform="translate(0 ' + (top * scale - 8).toFixed(0) + ')">' +
+        '<path d="M-4 0 q 2 -3 0 -6 M0 0 q 2 -3 0 -6 M4 0 q 2 -3 0 -6" fill="none" stroke="#c7d99a" stroke-width="1.2" opacity="0.85"/></g>'
+      : '';
 
-    return '<g class="kith-group' + (sel ? ' selected' : '') + ' act-' + k.act + (inWater ? ' swimming' : '') + '" data-kith="' + k.id + '" ' +
+    return '<g class="kith-group' + (sel ? ' selected' : '') + (k.sick ? ' sick' : '') + ' act-' + k.act + (inWater ? ' swimming' : '') + '" data-kith="' + k.id + '" ' +
       'style="transition: transform ' + (KITH_TICK_MS / 1000 + 0.2) + 's linear" ' +
       'transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')">' +
       ripple +
@@ -5259,7 +5422,7 @@ html, body {
       '<g class="pose">' +
       '<g transform="translate(0 ' + (inWater ? 3.5 : 0) + ') scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
       parts.join('') +
-      '</g></g></g>' + zSvg + labelSvg + intentSvg + speechSvg + '</g>';
+      '</g></g></g>' + zSvg + sickSvg + labelSvg + intentSvg + speechSvg + '</g>';
   }
 
   // Between full renders, glide the kith to their new positions cheaply.
@@ -5309,6 +5472,7 @@ html, body {
       var wxNow = W.weatherAt(state.id, vnow());
       notes.push(wxNow.label + WX_VERBS[lastWxKind]);
     }
+    if (W.livingKith(state).some(function (k) { return k.sick; })) notes.push('a sickness is among the folk');
     var gen = notes.length ? ' <span class="gen">· ' + notes.join(' · ') + '</span>' : '';
     var disNow = W.disasterAt(state.id, vnow());
     var alarm = disNow ? ' <span class="alarm">⚠ ' + (disNow.phase === 'warning' ? disNow.name + ' is coming' : disNow.name + ' — run!') + '</span>' : '';
@@ -5402,7 +5566,8 @@ html, body {
         '<div class="row"><button class="btn" data-act="close-panel">Close</button></div></div>';
     }
 
-    var mood = k.starving ? 'starving' :
+    var mood = k.sick ? 'unwell with ' + escapeHtml(k.sick.name) :
+      k.starving ? 'starving' :
       k.act === 'eat' ? 'sipping nectar' :
       k.act === 'shelter' ? 'sheltering from the storm' :
       k.act === 'rest' ? 'dozing' :
@@ -5440,6 +5605,8 @@ html, body {
     if (W.knowsOf(k).indexOf('shelter') > -1) skills.push('a builder: it raises shelters');
     if (W.knowsOf(k).indexOf('hearth') > -1) skills.push('a hearth-keeper: warmth follows it');
     if (W.knowsOf(k).indexOf('ward') > -1) skills.push('a watcher: it keeps the watch against the dark');
+    if (W.knowsOf(k).indexOf('tending') > -1) skills.push('a healer: it tends the sick through the fever');
+    if (k.hadPlague && k.hadPlague.length) skills.push('has weathered a sickness, and carries its memory in the blood');
     (k.relics || []).forEach(function (r) { skills.push('carries ' + escapeHtml(r.name) + ', from beyond the edge'); });
     if (k.scars) skills.push(k.scars === 1 ? 'bears a scar from the far country' : 'bears the scars of hard travels');
     var skillLine = skills.length ? skills.join(' · ') : null;
@@ -5552,12 +5719,13 @@ html, body {
         var kindName = W.kindOf(k.genome).name;
         var away = !!k.expedition;
         var mood = away ? 'away beyond the edge' :
+          k.sick ? 'unwell' :
           k.starving ? 'starving' : k.act === 'eat' ? 'eating' : k.act === 'shelter' ? 'sheltering' :
           k.act === 'rest' ? 'dozing' : k.energy < 0.45 ? 'hungry' : 'about';
         var traits = [];
         if (state.emissary === k.id) traits.push('emissary');
         if (W.isSwimmer(k)) traits.push('swimmer');
-        W.knowsOf(k).forEach(function (s) { traits.push({ seedkeeping: 'seed-keeper', song: 'singer', shelter: 'builder', hearth: 'hearth-keeper', ward: 'watcher' }[s] || s); });
+        W.knowsOf(k).forEach(function (s) { traits.push({ seedkeeping: 'seed-keeper', song: 'singer', shelter: 'builder', hearth: 'hearth-keeper', ward: 'watcher', tending: 'healer' }[s] || s); });
         if (k.relics && k.relics.length) traits.push('far-traveller');
         if (k.scars) traits.push('scarred');
         var doing = away ? '<br><span class="muted">it went looking for what lies past the map</span>'
@@ -6085,7 +6253,8 @@ html, body {
     var phaseNow = W.dayPhase(vnow());
     // while a hunter stalks or the country turns on the folk, repaint every
     // beat so the danger moves; otherwise repaint only when the light turns
-    if (!openModal && (phaseNow !== lastDayPhase || W.predatorAt(state, vnow()) || W.disasterAt(state.id, vnow()))) {
+    if (!openModal && (phaseNow !== lastDayPhase || W.predatorAt(state, vnow()) || W.disasterAt(state.id, vnow()) ||
+        W.livingKith(state).some(function (k) { return k.sick; }))) {
       lastDayPhase = phaseNow;
       render();
     } else if (!openModal) {

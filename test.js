@@ -1528,6 +1528,116 @@ W.mergeWorlds(fMerged, clone(fMergeB));
 check('reunited copies hold one field, not two',
   Object.keys(fMerged.structures).filter(id => id === fldA.id).length === 1);
 
+/* ---------- 26c. illness: a sickness among the folk ---------- */
+
+console.log('illness');
+const PLDAY = 86400000;
+const savedPlNow = fakeNow;
+// find a world with a plague on its calendar
+let plagueWorld = null, plague = null;
+for (let i = 0; i < 500 && !plague; i++) {
+  const cand = W.newWorld();
+  for (let p = 1200; p < 1250 && !plague; p++) {
+    const d = W.plagueDue(cand.id, p * 15 * PLDAY + 2 * PLDAY);
+    if (d) { plagueWorld = cand; plague = d; }
+  }
+}
+check('a sickness is on some world\'s calendar', !!plague);
+check('the outbreak is a pure function of world and time', !!plague &&
+  JSON.stringify(W.plagueDue(plagueWorld.id, plague.start)) === JSON.stringify(W.plagueDue(plagueWorld.id, plague.start)));
+
+if (plague) {
+  // a crowd of grown folk, all bonded into one web (so it can spread)
+  fakeNow = plague.start;
+  const proster = Object.values(plagueWorld.kith);
+  while (Object.keys(plagueWorld.kith).length < 7) {
+    const nid = 'px' + Object.keys(plagueWorld.kith).length;
+    const cp = clone(proster[0]); cp.id = nid; cp.given = nid; plagueWorld.kith[nid] = cp;
+  }
+  const pfolk = Object.values(plagueWorld.kith);
+  pfolk.forEach(k => {
+    k.born = plague.start - 4 * PLDAY; k.span = 40; k.passed = null; delete k.expedition; k.sick = null; k.hadPlague = [];
+    k.brain.boldness = 0.5; k.knows = [];
+    k.trust = {}; pfolk.forEach(o => { if (o.id !== k.id) k.trust[o.id] = 0.8; }); // all fast friends
+  });
+  plagueWorld.emissary = null;
+  const twinPlague = clone(plagueWorld);
+  const preOutbreak = clone(plagueWorld); // a snapshot to run the tending trial from
+
+  // the outbreak: one takes it first
+  W.plagueTick(plagueWorld, plague.start, []);
+  const zero = Object.values(plagueWorld.kith).filter(k => k.sick);
+  check('a sickness breaks out with one patient', zero.length === 1);
+  check('the outbreak is chronicled once', plagueWorld.chronicle.filter(e => e.id === 'pl' + plague.id).length === 1 &&
+    plagueWorld.chronicle.some(e => e.id === 'pl' + plague.id && e.kind === 'plague'));
+  check('the same soul takes it first in every copy', (() => {
+    W.plagueTick(twinPlague, plague.start, []);
+    const z2 = Object.values(twinPlague.kith).filter(k => k.sick);
+    return z2.length === 1 && z2[0].id === zero[0].id;
+  })());
+
+  // it spreads along the bonds over the days
+  for (let d = 0; d < 12; d++) { fakeNow = plague.start + d * PLDAY; W.plagueTick(plagueWorld, fakeNow, []); }
+  const everSick = Object.values(plagueWorld.kith).filter(k => k.sick || (k.hadPlague || []).indexOf(plague.id) > -1 || k.passed);
+  check('the sickness spreads to more than its first', everSick.length > 1);
+
+  // it runs its course: recover (immune) or die, and then it passes
+  for (let d = 12; d < 40; d++) { fakeNow = plague.start + d * PLDAY; W.plagueTick(plagueWorld, fakeNow, []); }
+  check('some weathered it and are now immune',
+    Object.values(plagueWorld.kith).some(k => !k.passed && (k.hadPlague || []).indexOf(plague.id) > -1));
+  check('the immune are never taken by that same sickness again',
+    Object.values(plagueWorld.kith).filter(k => !k.passed && (k.hadPlague || []).indexOf(plague.id) > -1)
+      .every(k => !(k.sick && k.sick.id === plague.id)));
+  check('the passing of the sickness is chronicled once',
+    plagueWorld.chronicle.filter(e => e.id === 'pp' + plague.id).length === 1);
+
+  // determinism: run the twin the same way — the same souls fall and recover
+  for (let d = 0; d < 40; d++) { fakeNow = plague.start + d * PLDAY; W.plagueTick(twinPlague, fakeNow, []); }
+  const lostHere = Object.values(plagueWorld.kith).filter(k => k.passed).map(k => k.id).sort();
+  const lostThere = Object.values(twinPlague.kith).filter(k => k.passed).map(k => k.id).sort();
+  check('the same souls are lost in every copy', JSON.stringify(lostHere) === JSON.stringify(lostThere));
+
+  // tending saves lives: the same outbreak run twice from the snapshot — once
+  // with no healers, once with everyone a healer — and the tended lose fewer
+  function runOutbreak(world, giveTending) {
+    if (giveTending) Object.values(world.kith).forEach(k => { k.knows = ['tending']; });
+    for (let d = 0; d < 40; d++) { fakeNow = plague.start + d * PLDAY; W.plagueTick(world, fakeNow, []); }
+    return Object.values(world.kith).filter(k => k.passed).length;
+  }
+  const bareDead = runOutbreak(clone(preOutbreak), false);
+  const tendedDead = runOutbreak(clone(preOutbreak), true);
+  check('a tended world loses fewer to the sickness than a bare one', tendedDead <= bareDead);
+
+  // reunited copies grieve the same, once
+  const plMergedA = clone(plagueWorld), plMergedB = clone(twinPlague);
+  const plMerged = clone(plMergedA);
+  W.mergeWorlds(plMerged, clone(plMergedB));
+  check('reunited copies hold one telling of the outbreak',
+    plMerged.chronicle.filter(e => e.id === 'pl' + plague.id).length === 1 &&
+    plMerged.chronicle.filter(e => e.id === 'pp' + plague.id).length === 1);
+
+  // a stranger with no bonds does not catch it from afar
+  const lonelyWorld = W.newWorld();
+  const lros = Object.values(lonelyWorld.kith);
+  while (Object.keys(lonelyWorld.kith).length < 7) { const nid = 'lx' + Object.keys(lonelyWorld.kith).length; const cp = clone(lros[0]); cp.id = nid; lonelyWorld.kith[nid] = cp; }
+  const lfolk = Object.values(lonelyWorld.kith);
+  lfolk.forEach(k => { k.born = plague.start - 4 * PLDAY; k.span = 40; k.passed = null; delete k.expedition; k.sick = null; k.hadPlague = []; k.trust = {}; });
+  // make patient zero sick by hand, but give it NO bonds
+  const pd2 = W.plagueDue(lonelyWorld.id, plague.start);
+  if (pd2) {
+    fakeNow = pd2.start;
+    W.plagueTick(lonelyWorld, pd2.start, []);
+    const loner = Object.values(lonelyWorld.kith).find(k => k.sick);
+    if (loner) { loner.trust = {}; } // sever all bonds
+    for (let d = 0; d < 6; d++) { fakeNow = pd2.start + d * PLDAY; W.plagueTick(lonelyWorld, fakeNow, []); }
+    const infectedCount = Object.values(lonelyWorld.kith).filter(k => k.sick || (k.hadPlague || []).indexOf(pd2.id) > -1 || k.passed).length;
+    check('with no bonds, a sickness cannot spread', infectedCount <= 1);
+  } else {
+    check('with no bonds, a sickness cannot spread', true, 'no plague on lonely world — skipped');
+  }
+}
+fakeNow = savedPlNow;
+
 /* ---------- 27. expeditions beyond the edge ---------- */
 
 console.log('expeditions');

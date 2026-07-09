@@ -344,6 +344,11 @@ html, body {
   stroke-dasharray: 5 6;
   pointer-events: none;
 }
+/* Illness: a fever-mark wavers over the sick (opacity only, so the mark's
+ * own positioning transform is never overridden) */
+.kith-sick path { animation: sickWaver 2.2s ease-in-out infinite; }
+@keyframes sickWaver { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.95; } }
+
 .village-name {
   font-family: Georgia, serif;
   font-size: 15px;

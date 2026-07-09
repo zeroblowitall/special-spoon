@@ -540,7 +540,8 @@
     song: 'the song',
     shelter: 'the craft of shelter',
     hearth: 'the keeping of hearths',
-    ward: 'the warding'
+    ward: 'the warding',
+    tending: 'the tending of the sick'
   };
 
   /* ---------- structures: what society raises ----------
@@ -968,7 +969,7 @@
   // (traits, stage, standing, span), so every copy would pick the same soul.
   function expeditionCandidates(w, now, back) {
     return livingKith(w).filter(function (k) {
-      if (k.wanderer || k.expedition || k.passed || k.departed) return false;
+      if (k.wanderer || k.expedition || k.passed || k.departed || k.sick) return false;
       if (w.emissary === k.id) return false; // the emissary stays for the meeting-stone
       if (kithStage(k, now) !== 'grown') return false; // the young and the old stay home
       if ((k.born + (k.span || 16) * DAY) <= back) return false; // must outlast the journey
@@ -1434,6 +1435,134 @@
       }
     }
     return best;
+  }
+
+  /* ---------- illness: a sickness among the folk ----------
+   * Now and then a sickness rises in a world and runs through the folk. It
+   * does not travel by chance encounter (that would drift between copies) but
+   * along the BOND GRAPH — you take it from those you are closest to, your
+   * friends and your kin — which is merged content, so every copy suffers the
+   * same outbreak, the same spread, the same losses, at the same hours.
+   *
+   * Each infection has a seeded incubation and a seeded course; a sick kith
+   * recovers (and is then immune) or dies, its fate softened if a friend who
+   * knows the TENDING sits with it. All of it derives from the plague's id,
+   * the kith's id, and the trust between them — no randomness of the moment. */
+
+  var PLAGUE_PERIOD = 15 * DAY;
+  var PLAGUES = [
+    { name: 'a shivering fever', verb: 'a fever ran through' },
+    { name: 'the grey cough', verb: 'a hard cough spread among' },
+    { name: 'a wasting sickness', verb: 'a wasting took hold of' },
+    { name: 'the heavy sleep', verb: 'a sickness of sleep crept over' }
+  ];
+
+  function plagueDue(worldId, t) {
+    var period = Math.floor(t / PLAGUE_PERIOD);
+    var rng = mulberry32(hash32(worldId + ':plague:' + period));
+    if (rng() >= 0.3) return null; // most seasons the folk stay hale
+    var kind = PLAGUES[Math.floor(rng() * PLAGUES.length)];
+    var start = period * PLAGUE_PERIOD + Math.floor(rng() * 10 * DAY);
+    return {
+      id: 'plg' + hash32(worldId + ':plague:' + period).toString(16),
+      name: kind.name, verb: kind.verb, start: start, period: period
+    };
+  }
+
+  function plagueContagious(id, from, to) { return mulberry32(hash32(id + ':inf:' + from + ':' + to))() < 0.55; }
+  function plagueIncubation(id, from, to) { return (0.5 + mulberry32(hash32(id + ':inc:' + from + ':' + to))() * 2.5) * DAY; }
+  function plagueDuration(id, kid) { return (3 + mulberry32(hash32(id + ':dur:' + kid))() * 4) * DAY; }
+  function plagueLethal(k, id, tended) {
+    var base = 0.32;
+    var st = kithStage(k, k.sick.since);
+    if (st === 'young' || st === 'elder') base += 0.2;   // the young and old are frailer
+    base -= k.brain.boldness * 0.1;                       // the hardy throw it off
+    if (tended) base -= 0.28;                             // a tended kith is far likelier to live
+    return mulberry32(hash32(id + ':fate:' + k.id))() < base;
+  }
+  // Does a living, well friend who knows the tending sit with this one?
+  function plagueTended(w, k) {
+    return livingKith(w).some(function (o) {
+      return o.id !== k.id && !o.sick && (k.trust[o.id] || 0) >= 0.5 && knowsOf(o).indexOf('tending') > -1;
+    });
+  }
+  // The first to take it — chosen from content, so every copy names the same.
+  function plaguePatientZero(w, due, present) {
+    var pool = present.filter(function (k) { return !k.sick && (k.hadPlague || []).indexOf(due.id) === -1; });
+    if (!pool.length) return null;
+    pool.sort(function (a, b) {
+      var sa = (1 - a.brain.boldness) * 0.3 + (hash32(due.id + a.id) % 1000) / 1000;
+      var sb = (1 - b.brain.boldness) * 0.3 + (hash32(due.id + b.id) % 1000) / 1000;
+      return sb - sa || (a.id < b.id ? -1 : 1);
+    });
+    return pool[0];
+  }
+
+  function plagueTick(w, now, events) {
+    var due = plagueDue(w.id, now);
+    if (!due || now < due.start) return;
+    var present = presentKith(w);
+    var active = w.chronicle.some(function (e) { return e.id === 'pl' + due.id; });
+    // a sickness needs a CROWD to break out — but once it has, it must run its
+    // course even as the folk thin, or the last sick would never resolve
+    if (!active && present.length < 5) return;
+
+    // outbreak: the first to take it
+    if (!active) {
+      var zero = plaguePatientZero(w, due, present);
+      if (!zero) return;
+      zero.sick = { id: due.id, since: due.start, name: due.name };
+      zero.u = bumpClock(w);
+      var outText = due.verb.charAt(0).toUpperCase() + due.verb.slice(1) + ' the folk of ' + w.name +
+        '. ' + kithLabel(zero) + ' is the first to take ' + due.name + '.';
+      chronicle(w, 'plague', outText, 'pl' + due.id);
+      events.push({ kind: 'plague', text: outText });
+    }
+
+    // spread along the bonds — you take it from those closest to you
+    present.filter(function (k) { return k.sick && k.sick.id === due.id; }).forEach(function (s) {
+      Object.keys(s.trust || {}).forEach(function (bid) {
+        if ((s.trust[bid] || 0) < 0.5) return;
+        var b = w.kith[bid];
+        if (!b || !isAlive(b) || b.expedition || b.sick || (b.hadPlague || []).indexOf(due.id) > -1) return;
+        if (!plagueContagious(due.id, s.id, b.id)) return;
+        var at = s.sick.since + plagueIncubation(due.id, s.id, b.id);
+        if (now >= at) { b.sick = { id: due.id, since: at, name: due.name }; b.u = bumpClock(w); }
+      });
+    });
+
+    // the course of the illness: recover (and be immune), or be lost
+    present.forEach(function (k) {
+      if (!k.sick || k.sick.id !== due.id) return;
+      var at = k.sick.since + plagueDuration(due.id, k.id);
+      if (now < at) return;
+      var tended = plagueTended(w, k);
+      k.hadPlague = (k.hadPlague || []).concat([due.id]);
+      if (plagueLethal(k, due.id, tended)) {
+        k.passed = at;
+        if (w.emissary === k.id) w.emissary = null;
+        k.u = bumpClock(w);
+        var dText = kithLabel(k) + ' could not throw off ' + due.name + ', and fell asleep beneath the soil.';
+        chronicle(w, 'passing', dText, 'pz' + due.id + k.id);
+        events.push({ kind: 'passing', text: dText });
+      } else {
+        k.sick = null;
+        k.u = bumpClock(w);
+      }
+    });
+
+    // burn-out: when none are sick and the sickness has run its course
+    if (!w.chronicle.some(function (e) { return e.id === 'pp' + due.id; })) {
+      var anySick = livingKith(w).some(function (k) { return k.sick && k.sick.id === due.id; });
+      var anyResolved = livingKith(w).some(function (k) { return (k.hadPlague || []).indexOf(due.id) > -1; }) ||
+        w.chronicle.some(function (e) { return e.id.indexOf('pz' + due.id) === 0; });
+      if (!anySick && anyResolved) {
+        var passText = due.name.charAt(0).toUpperCase() + due.name.slice(1) +
+          ' has passed out of ' + w.name + '. Those it spared carry its memory in their blood, and will not take it again.';
+        chronicle(w, 'plague', passText, 'pp' + due.id);
+        events.push({ kind: 'plague', text: passText });
+      }
+    }
   }
 
   /* ---------- the almanac ----------
@@ -2363,6 +2492,7 @@
     expeditionTick(w, now, events);
     predatorTick(w, now, events);
     disasterTick(w, now, events);
+    plagueTick(w, now, events);
     var terrain = makeTerrain(w.id);
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
     var wxNow = weatherAt(w.id, now);
@@ -2387,6 +2517,7 @@
         return s.type === 'leanto' && structDist(s, k.x, k.y) < 0.07;
       })) decayMul = 0.6; // a roof is worth more than a rock
       if (k.act === 'sleep') decayMul = 0; // the sleeping do not tire; they mend
+      if (k.sick) decayMul += 0.4; // the sick burn low and tire fast
       var decay = ENERGY_DECAY_PER_SEC * decayMul * dt;
       k.energy = Math.max(0, k.energy - decay);
       if (k.energy <= 0 && !k.starving) k.starving = now;
@@ -2410,6 +2541,7 @@
         k.goal = 'make';
         k.intent = rising.type === 'hearth' ? 'tending the new hearth' : 'raising the lean-to';
       }
+      if (k.sick) { k.intent = 'unwell — low and slow'; k.drive = 'rest'; k.goal = 'rest'; }
       // the country turns on the folk: drop everything and run for high ground.
       // This is real to watch, but WHO lives is decided by content at the
       // strike, not by where the running left them.
@@ -2702,7 +2834,8 @@
           var limbSpeed = [0.8, 1, 1.15][k.genome.limbs || 0] || 1;
           var inWater = !isLandAt(terrain, k.x, k.y);
           var mediumSpeed = inWater ? 1.25 : 1; // a swimmer glides
-          var step = Math.min(dist, k.genome.speed * stageSpeed * limbSpeed * mediumSpeed * dt);
+          var sickSpeed = k.sick ? 0.6 : 1;      // the sick drag their feet
+          var step = Math.min(dist, k.genome.speed * stageSpeed * limbSpeed * mediumSpeed * sickSpeed * dt);
           var walk = walkLine(terrain, k, k.x, k.y, dx / dist, dy / dist, step);
           if (walk.moved > 0) {
             k.x = walk.x; k.y = walk.y;
@@ -2798,8 +2931,8 @@
           }
         }
 
-        // courting: two bonded, hale, grown kith in fair weather
-        if (!storm && ka.trust[kb.id] >= 0.5 && kb.trust[ka.id] >= 0.5 &&
+        // courting: two bonded, hale, grown kith in fair weather (never the sick)
+        if (!storm && !ka.sick && !kb.sick && ka.trust[kb.id] >= 0.5 && kb.trust[ka.id] >= 0.5 &&
             ka.energy > 0.65 && kb.energy > 0.65 &&
             kithStage(ka, now) === 'grown' && kithStage(kb, now) === 'grown') {
           var birth = birthChild(w, ka, kb, dayBucket);
@@ -2910,6 +3043,22 @@
           'and to teach the others to stand together when the dark comes. It knows the warding now.';
         chronicle(w, 'discovery', wardText, 'dw' + k.id);
         events.push({ kind: 'discovery', text: wardText });
+      });
+    }
+
+    /* -- the tending: when a sickness comes, a caring, patient soul learns to
+     * sit with the sick, which leaves ease the fever, and teaches the others.
+     * Rolled on its own seed so it never perturbs the shared tick stream. -- */
+    if (w.chronicle.some(function (e) { return e.kind === 'plague'; })) {
+      alive.forEach(function (k) {
+        if (knowsOf(k).indexOf('tending') > -1) return;
+        if (k.brain.sociability <= 0.6 || k.brain.patience <= 0.55) return;
+        if (mulberry32(hash32(w.id + ':tendroll:' + dayBucket + ':' + k.id))() >= 0.03) return;
+        learn(w, k, 'tending');
+        var tText = kithLabel(k) + ' sat with the sick through the long nights, learned which leaves bring a fever down, ' +
+          'and taught the others. It knows the tending of the sick now.';
+        chronicle(w, 'discovery', tText, 'dte' + k.id);
+        events.push({ kind: 'discovery', text: tText });
       });
     }
 
@@ -3451,6 +3600,8 @@
     disasterDue: disasterDue,
     disasterAt: disasterAt,
     disasterTick: disasterTick,
+    plagueDue: plagueDue,
+    plagueTick: plagueTick,
     presentKith: presentKith,
     almanacTick: almanacTick,
     almanacPages: almanacPages,

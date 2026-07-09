@@ -958,8 +958,10 @@
     var stage = W.kithStage(k, now);
     var scale = g.size * (stage === 'young' ? 0.65 : 1) * (0.85 + (k.y - 0.55) * 0.9);
     var sat = stage === 'elder' ? 30 : 60;
-    var body = 'hsl(' + g.hue + ', ' + sat + '%, 58%)';
-    var pale = 'hsl(' + g.hue + ', ' + sat + '%, 74%)';
+    if (k.sick) sat = Math.round(sat * 0.4); // the sick go pale and grey
+    var light = k.sick ? 52 : 58;
+    var body = 'hsl(' + g.hue + ', ' + sat + '%, ' + light + '%)';
+    var pale = 'hsl(' + g.hue + ', ' + sat + '%, ' + (light + 16) + '%)';
     var deep = 'hsl(' + g.hue + ', ' + Math.max(25, sat - 10) + '%, 42%)';
     var sel = selected && selected.type === 'kith' && selected.id === k.id;
     var emissary = state.emissary === k.id;
@@ -1102,8 +1104,13 @@
     // a sleeping "z" — always present, shown only by the act-sleep class so
     // the cheap incremental update can reveal it without a full re-render
     var zSvg = '<text class="kith-z" x="' + (rx * scale + 2).toFixed(0) + '" y="' + (-(-top + 4) * scale).toFixed(0) + '">z</text>';
+    // a fever-mark hangs over the sick — three faint wavering lines of heat
+    var sickSvg = k.sick
+      ? '<g class="kith-sick" transform="translate(0 ' + (top * scale - 8).toFixed(0) + ')">' +
+        '<path d="M-4 0 q 2 -3 0 -6 M0 0 q 2 -3 0 -6 M4 0 q 2 -3 0 -6" fill="none" stroke="#c7d99a" stroke-width="1.2" opacity="0.85"/></g>'
+      : '';
 
-    return '<g class="kith-group' + (sel ? ' selected' : '') + ' act-' + k.act + (inWater ? ' swimming' : '') + '" data-kith="' + k.id + '" ' +
+    return '<g class="kith-group' + (sel ? ' selected' : '') + (k.sick ? ' sick' : '') + ' act-' + k.act + (inWater ? ' swimming' : '') + '" data-kith="' + k.id + '" ' +
       'style="transition: transform ' + (KITH_TICK_MS / 1000 + 0.2) + 's linear" ' +
       'transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')">' +
       ripple +
@@ -1112,7 +1119,7 @@
       '<g class="pose">' +
       '<g transform="translate(0 ' + (inWater ? 3.5 : 0) + ') scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
       parts.join('') +
-      '</g></g></g>' + zSvg + labelSvg + intentSvg + speechSvg + '</g>';
+      '</g></g></g>' + zSvg + sickSvg + labelSvg + intentSvg + speechSvg + '</g>';
   }
 
   // Between full renders, glide the kith to their new positions cheaply.
@@ -1162,6 +1169,7 @@
       var wxNow = W.weatherAt(state.id, vnow());
       notes.push(wxNow.label + WX_VERBS[lastWxKind]);
     }
+    if (W.livingKith(state).some(function (k) { return k.sick; })) notes.push('a sickness is among the folk');
     var gen = notes.length ? ' <span class="gen">· ' + notes.join(' · ') + '</span>' : '';
     var disNow = W.disasterAt(state.id, vnow());
     var alarm = disNow ? ' <span class="alarm">⚠ ' + (disNow.phase === 'warning' ? disNow.name + ' is coming' : disNow.name + ' — run!') + '</span>' : '';
@@ -1255,7 +1263,8 @@
         '<div class="row"><button class="btn" data-act="close-panel">Close</button></div></div>';
     }
 
-    var mood = k.starving ? 'starving' :
+    var mood = k.sick ? 'unwell with ' + escapeHtml(k.sick.name) :
+      k.starving ? 'starving' :
       k.act === 'eat' ? 'sipping nectar' :
       k.act === 'shelter' ? 'sheltering from the storm' :
       k.act === 'rest' ? 'dozing' :
@@ -1293,6 +1302,8 @@
     if (W.knowsOf(k).indexOf('shelter') > -1) skills.push('a builder: it raises shelters');
     if (W.knowsOf(k).indexOf('hearth') > -1) skills.push('a hearth-keeper: warmth follows it');
     if (W.knowsOf(k).indexOf('ward') > -1) skills.push('a watcher: it keeps the watch against the dark');
+    if (W.knowsOf(k).indexOf('tending') > -1) skills.push('a healer: it tends the sick through the fever');
+    if (k.hadPlague && k.hadPlague.length) skills.push('has weathered a sickness, and carries its memory in the blood');
     (k.relics || []).forEach(function (r) { skills.push('carries ' + escapeHtml(r.name) + ', from beyond the edge'); });
     if (k.scars) skills.push(k.scars === 1 ? 'bears a scar from the far country' : 'bears the scars of hard travels');
     var skillLine = skills.length ? skills.join(' · ') : null;
@@ -1405,12 +1416,13 @@
         var kindName = W.kindOf(k.genome).name;
         var away = !!k.expedition;
         var mood = away ? 'away beyond the edge' :
+          k.sick ? 'unwell' :
           k.starving ? 'starving' : k.act === 'eat' ? 'eating' : k.act === 'shelter' ? 'sheltering' :
           k.act === 'rest' ? 'dozing' : k.energy < 0.45 ? 'hungry' : 'about';
         var traits = [];
         if (state.emissary === k.id) traits.push('emissary');
         if (W.isSwimmer(k)) traits.push('swimmer');
-        W.knowsOf(k).forEach(function (s) { traits.push({ seedkeeping: 'seed-keeper', song: 'singer', shelter: 'builder', hearth: 'hearth-keeper', ward: 'watcher' }[s] || s); });
+        W.knowsOf(k).forEach(function (s) { traits.push({ seedkeeping: 'seed-keeper', song: 'singer', shelter: 'builder', hearth: 'hearth-keeper', ward: 'watcher', tending: 'healer' }[s] || s); });
         if (k.relics && k.relics.length) traits.push('far-traveller');
         if (k.scars) traits.push('scarred');
         var doing = away ? '<br><span class="muted">it went looking for what lies past the map</span>'
@@ -1938,7 +1950,8 @@
     var phaseNow = W.dayPhase(vnow());
     // while a hunter stalks or the country turns on the folk, repaint every
     // beat so the danger moves; otherwise repaint only when the light turns
-    if (!openModal && (phaseNow !== lastDayPhase || W.predatorAt(state, vnow()) || W.disasterAt(state.id, vnow()))) {
+    if (!openModal && (phaseNow !== lastDayPhase || W.predatorAt(state, vnow()) || W.disasterAt(state.id, vnow()) ||
+        W.livingKith(state).some(function (k) { return k.sick; }))) {
       lastDayPhase = phaseNow;
       render();
     } else if (!openModal) {
