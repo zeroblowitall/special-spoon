@@ -104,12 +104,30 @@
     belonging: 'together', curiosity: 'seeing', purpose: 'making'
   };
 
+  /* ---------- goals: the pressing need chooses a pursuit ----------
+   * The lightest of planners: the loudest need names the goal a kith is
+   * about right now. A goal is a HEADING held across many ticks, not a
+   * twitch — it can be interrupted by a sharper need, abandoned, or (for a
+   * project like a building) carried until the thing it wants stands built.
+   * The low-level steps still come from the tick; this is the "why". */
+  var GOALS = {
+    safety: 'shelter',   // reach a roof, high ground, the herd
+    hunger: 'forage',    // find and eat what agrees with you
+    rest: 'rest',        // sleep, or simply pause
+    belonging: 'kinship', // seek out kin and sit with them
+    curiosity: 'wander', // go and see somewhere new
+    purpose: 'make'      // build, tend, set something lasting down
+  };
+  function goalFor(drive) { return GOALS[drive] || 'wander'; }
+
   return {
     NEEDS: NEEDS,
     pressures: pressures,
     needs: needs,
     dominant: dominant,
     driveLabel: driveLabel,
+    goalFor: goalFor,
+    GOALS: GOALS,
     DRIVE_WORDS: DRIVE_WORDS,
     DRIVE_GLOSS: DRIVE_GLOSS
   };

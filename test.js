@@ -39,7 +39,7 @@ function stable(value) {
 // onto its OWN land, so x/y legitimately differ between copies.
 // The mind, too, is presentation: needs/drive/intent are felt fresh each tick
 // from ephemeral state (energy, act, weather), never stored and never merged.
-const POSITION_KEYS = { x: 1, y: 1, tx: 1, ty: 1, facing: 1, saying: 1, sayingUntil: 1, gCallMark: 1, needs: 1, drive: 1, intent: 1 };
+const POSITION_KEYS = { x: 1, y: 1, tx: 1, ty: 1, facing: 1, saying: 1, sayingUntil: 1, gCallMark: 1, needs: 1, drive: 1, intent: 1, goal: 1 };
 function content(value) {
   const c = clone(value);
   (function strip(node) {
@@ -1392,6 +1392,104 @@ const minded = W.livingKith(mindedWorld);
 check('a ticked world gives every kith a mind',
   minded.length > 0 && minded.every(k => k.needs && Mind.NEEDS.indexOf(k.drive) > -1 &&
     typeof k.intent === 'string' && k.intent.length > 0));
+
+/* ---------- 24. goals: the pressing need chooses a pursuit ---------- */
+
+console.log('goals');
+check('every drive names a goal', Mind.NEEDS.every(n => typeof Mind.goalFor(n) === 'string' && Mind.goalFor(n).length));
+check('purpose is to make', Mind.goalFor('purpose') === 'make');
+check('hunger is to forage', Mind.goalFor('hunger') === 'forage');
+const goalValues = Object.keys(Mind.GOALS).map(k => Mind.GOALS[k]);
+W.kithTick(mindedWorld, 2);
+check('a ticked kith holds a goal',
+  W.livingKith(mindedWorld).every(k => goalValues.indexOf(k.goal) > -1));
+
+/* ---------- 25. the water's edge is a real wall ---------- */
+
+console.log('the water');
+// a world whose realm lets swimmers cross but bars walkers
+let seaId = null, seaWorld = null;
+for (let i = 0; i < 200 && !seaId; i++) {
+  const cand = W.newWorld();
+  if (W.realmOf(cand.id).realm.pass === 'swim') { seaId = cand.id; seaWorld = cand; }
+}
+check('a sea-realm world can be found', !!seaId);
+if (seaId) {
+  const terr = W.makeTerrain(seaId);
+  // a walker probe: strip any fins so it cannot swim
+  const walker = clone(Object.values(seaWorld.kith)[0]);
+  walker.genome.fins = 0;
+  check('the walker is no swimmer', !W.isSwimmer(walker));
+  // scan a row for a land–water–land run: standable, then not, then standable
+  let triple = null;
+  for (let r = 0; r < terr.rows && !triple; r++) {
+    const y = 0.55 + (r + 0.5) / terr.rows * 0.45;
+    let land1 = null, sawWater = false;
+    for (let c = 0; c < terr.cols; c++) {
+      const x = (c + 0.5) / terr.cols;
+      const standable = W.canStandAt(terr, walker, x, y);
+      if (standable && land1 === null) land1 = x;
+      else if (!standable && land1 !== null) sawWater = true;
+      else if (standable && sawWater) { triple = { y, near: land1, far: x }; break; }
+    }
+  }
+  check('a lake with land on both sides exists somewhere', !!triple);
+  if (triple) {
+    // a straight line from near to far crosses water: unreachable on foot
+    check('a walker cannot see a clear path across the water',
+      !W.reachableStraight(terr, walker, triple.near, triple.y, triple.far, triple.y));
+    // ...but a swimmer can
+    const swimmerProbe = clone(walker); swimmerProbe.genome.fins = 2;
+    check('a swimmer can',
+      !W.isSwimmer(swimmerProbe) || W.reachableStraight(terr, swimmerProbe, triple.near, triple.y, triple.far, triple.y));
+    // the warp leap: one enormous step must NOT carry the walker across
+    const leaper = seaWorld.kith[Object.keys(seaWorld.kith)[0]];
+    leaper.genome.fins = 0;
+    leaper.x = triple.near; leaper.y = triple.y;
+    leaper.tx = triple.far; leaper.ty = triple.y;
+    leaper.act = 'wander';
+    W.kithTick(seaWorld, 100000); // a colossal warp step
+    check('a warp step cannot leap the lake',
+      W.canStandAt(terr, leaper, leaper.x, leaper.y) && leaper.x < triple.far - 1e-6);
+  }
+}
+
+/* ---------- 26. projects: you watch them rise ---------- */
+
+console.log('projects');
+const riseWorld = W.newWorld();
+const builder = Object.values(riseWorld.kith)[0];
+W.learn(riseWorld, builder, 'shelter');
+builder.energy = 1;
+const rDay = Math.floor(fakeNow / (24 * 3600 * 1000));
+const raising = W.buildStructure(riseWorld, builder, 'leanto', rDay);
+check('a project begins', !!raising && raising.start === fakeNow);
+check('a fresh build has barely risen', W.structRaised(raising, fakeNow) === 0);
+check('halfway through, it is half-raised',
+  Math.abs(W.structRaised(raising, fakeNow + W.BUILD_MS / 2) - 0.5) < 1e-6);
+check('given its time, it stands', W.structRaised(raising, fakeNow + W.BUILD_MS) === 1);
+// a structure from before this idea (no start) simply stands
+const legacyStruct = clone(raising); delete legacyStruct.start;
+check('old structures were always finished', W.structRaised(legacyStruct, fakeNow) === 1);
+// completion is chronicled, once, when its time comes
+const savedRiseNow = fakeNow;
+fakeNow += W.BUILD_MS + 1000;
+W.kithTick(riseWorld, 2);
+check('a finished raising is chronicled', riseWorld.chronicle.some(e => e.id === 'sc' + raising.id));
+W.kithTick(riseWorld, 2);
+check('and only once', riseWorld.chronicle.filter(e => e.id === 'sc' + raising.id).length === 1);
+fakeNow = savedRiseNow;
+// determinism: two copies raise and finish the same building, merged to one telling
+const twinRiseA = clone(riseWorld), twinRiseB = clone(riseWorld);
+twinRiseA.touched = twinRiseB.touched = fakeNow;
+[twinRiseA, twinRiseB].forEach(w => { w.chronicle = w.chronicle.filter(e => e.id !== 'sc' + raising.id); });
+fakeNow += W.BUILD_MS + 5000;
+W.kithTick(twinRiseA, 2); W.kithTick(twinRiseB, 2);
+const mergedRise = clone(twinRiseA);
+W.mergeWorlds(mergedRise, clone(twinRiseB));
+check('reunited copies hold one finished-telling, not two',
+  mergedRise.chronicle.filter(e => e.id === 'sc' + raising.id).length === 1);
+fakeNow = savedRiseNow;
 
 /* ---------- summary ---------- */
 

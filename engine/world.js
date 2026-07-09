@@ -288,6 +288,31 @@
     return isSwimmer(k);
   }
 
+  // The water's edge must be a wall at ANY speed. Movement used to check only
+  // the step's endpoint, so a big step (under ?warp) could leap clean across a
+  // lake. Instead we walk the line in increments finer than a terrain cell,
+  // stopping at the first spot this body cannot stand on. Returns how far it
+  // got and whether the way was blocked before the goal.
+  var WALK_SEG = 0.006; // terrain cells are ~0.008 wide; nothing is leapt
+  function walkLine(terrain, k, x0, y0, ux, uy, maxDist) {
+    var moved = 0, cx = x0, cy = y0, blocked = false, guard = 0;
+    while (moved < maxDist - 1e-9 && guard++ < 256) {
+      var adv = Math.min(WALK_SEG, maxDist - moved);
+      var nx = cx + ux * adv, ny = cy + uy * adv;
+      if (!canStandAt(terrain, k, nx, ny)) { blocked = true; break; }
+      cx = nx; cy = ny; moved += adv;
+    }
+    return { x: cx, y: cy, moved: moved, blocked: blocked };
+  }
+
+  // Is there a clear, standable straight line from here to there? Land-kith use
+  // this to avoid setting off toward a spot they'd only stall at the shore of.
+  function reachableStraight(terrain, k, x0, y0, x1, y1) {
+    var dx = x1 - x0, dy = y1 - y0, d = Math.sqrt(dx * dx + dy * dy);
+    if (d < 1e-6) return true;
+    return !walkLine(terrain, k, x0, y0, dx / d, dy / d, d).blocked;
+  }
+
   /* The mind: evolvable weights a kith is born with. Behaviour follows from
    * these, so selection quietly reshapes temperament over generations. */
   function newKithBrain(rng) {
@@ -535,6 +560,18 @@
     return Math.sqrt((s.x - x) * (s.x - x) + (s.y - y) * (s.y - y));
   }
 
+  // A building is not raised in an instant — you watch it rise. Progress is a
+  // pure function of how long since it was begun, so every copy of a world
+  // agrees exactly on how far along it is (and once merged, on the one true
+  // start time). Structures from before this idea have no start and simply
+  // stand, already finished.
+  var BUILD_MS = 45 * 60 * 1000; // a lean-to takes about three quarters of an hour
+  function structRaised(s, now) {
+    if (!s || s.start == null) return 1;
+    var r = (now - s.start) / BUILD_MS;
+    return r < 0 ? 0 : r > 1 ? 1 : r;
+  }
+
   function buildStructure(w, k, type, dayBucket) {
     ensureStructures(w);
     var sid = (type === 'hearth' ? 'h' : 'st') + hash32(k.id + ':build:' + type + ':' + dayBucket).toString(16);
@@ -548,13 +585,14 @@
       x: k.x, y: k.y,
       by: k.id,
       built: env.now(),
+      start: env.now(), // when the raising began — progress derives from this
       u: bumpClock(w)
     };
     w.structures[sid] = s;
     var whereName = realmBiome(w.id, biomeAt(terrain, k.x, k.y));
     chronicle(w, 'discovery', type === 'hearth'
-      ? kithLabel(k) + ' set stones in a ring by the shelters and kept something warm alive in it. A hearth burns in the ' + whereName + '.'
-      : kithLabel(k) + ' raised a lean-to in the ' + whereName + '. The weather will have to try harder now.',
+      ? kithLabel(k) + ' began setting a ring of stones by the shelters, to keep a fire in the ' + whereName + '.'
+      : kithLabel(k) + ' began piling stems against the stone in the ' + whereName + ' — a lean-to, rising.',
       'sb' + sid);
     return s;
   }
@@ -1766,7 +1804,19 @@
       // the intention with something concrete ("heading for the sunmoss").
       k.needs = Mind.needs(k, mindEnv);
       k.drive = Mind.dominant(k.needs);
+      k.goal = Mind.goalFor(k.drive);
       k.intent = Mind.driveLabel(k.drive);
+      // a project of one's own, still rising nearby, is a goal held across many
+      // ticks — it reads over the idle mood until the thing stands built
+      var rising = null;
+      for (var si = 0; si < structList.length; si++) {
+        var st0 = structList[si];
+        if (st0.by === k.id && structRaised(st0, now) < 1 && structDist(st0, k.x, k.y) < 0.16) { rising = st0; break; }
+      }
+      if (rising) {
+        k.goal = 'make';
+        k.intent = rising.type === 'hearth' ? 'tending the new hearth' : 'raising the lean-to';
+      }
 
       if (k.act === 'eat') {
         k.intent = 'sipping nectar'; k.drive = 'hunger';
@@ -2016,37 +2066,38 @@
           k.intent = 'pausing a moment'; k.drive = 'rest';
           return;
         } else {
-          // pick somewhere new to be — where this body can go. A kith with
-          // nothing pressing wanders on purpose: restlessness looking for shape.
+          // pick somewhere new to be — where this body can go, and can GET to
+          // without crossing water. A kith with nothing pressing wanders on
+          // purpose: restlessness looking for shape.
           k.intent = k.drive === 'purpose' ? 'off exploring, seeking something to do' : 'wandering the world';
           for (var tries = 0; tries < 8; tries++) {
             var range = 0.1 + k.brain.wanderlust * 0.5;
             var cx = Math.max(0.03, Math.min(0.97, k.x + (rng() - 0.5) * range * 2));
             var cy = Math.max(0.56, Math.min(0.97, k.y + (rng() - 0.5) * range));
-            if (canStandAt(terrain, k, cx, cy)) { k.tx = cx; k.ty = cy; break; }
+            if (canStandAt(terrain, k, cx, cy) && reachableStraight(terrain, k, k.x, k.y, cx, cy)) {
+              k.tx = cx; k.ty = cy; break;
+            }
           }
         }
       }
 
-      // move toward the target; the water's edge stops all but swimmers
+      // move toward the target; the water's edge stops all but swimmers — and
+      // stops them at ANY speed now, walked cell by cell so no warp step leaps it
       if (k.tx !== null) {
         var dx = k.tx - k.x, dy = k.ty - k.y;
         var dist = Math.sqrt(dx * dx + dy * dy);
-        var stageSpeed = kithStage(k, now) === 'elder' ? 0.6 : 1;
-        var limbSpeed = [0.8, 1, 1.15][k.genome.limbs || 0] || 1;
-        var inWater = !isLandAt(terrain, k.x, k.y);
-        var mediumSpeed = inWater ? 1.25 : 1; // a swimmer glides
-        var step = Math.min(dist, k.genome.speed * stageSpeed * limbSpeed * mediumSpeed * dt);
         if (dist > 0.0001) {
-          var nx = k.x + (dx / dist) * step;
-          var ny = k.y + (dy / dist) * step;
-          if (!canStandAt(terrain, k, nx, ny)) {
-            k.tx = null; k.ty = null; // shoreline reached — think again next tick
-          } else {
-            k.x = nx;
-            k.y = ny;
+          var stageSpeed = kithStage(k, now) === 'elder' ? 0.6 : 1;
+          var limbSpeed = [0.8, 1, 1.15][k.genome.limbs || 0] || 1;
+          var inWater = !isLandAt(terrain, k.x, k.y);
+          var mediumSpeed = inWater ? 1.25 : 1; // a swimmer glides
+          var step = Math.min(dist, k.genome.speed * stageSpeed * limbSpeed * mediumSpeed * dt);
+          var walk = walkLine(terrain, k, k.x, k.y, dx / dist, dy / dist, step);
+          if (walk.moved > 0) {
+            k.x = walk.x; k.y = walk.y;
             if (Math.abs(dx) > 0.002) k.facing = dx > 0 ? 1 : -1;
           }
+          if (walk.blocked) { k.tx = null; k.ty = null; } // the shore — think anew
         }
       }
     });
@@ -2258,6 +2309,22 @@
           }
         }
       }
+    });
+
+    /* -- a raising, finished: the day the roof or the fire is done. Told once,
+     * identically in every copy (progress is time, not tick-count) -- */
+    structList.forEach(function (s) {
+      if (s.start == null || structRaised(s, now) < 1) return;
+      var doneId = 'sc' + s.id;
+      if (w.chronicle.some(function (e) { return e.id === doneId; })) return;
+      var where = realmBiome(w.id, biomeAt(terrain, s.x, s.y));
+      var maker = w.kith[s.by];
+      var who = maker ? kithLabel(maker) + '’s ' : '';
+      var doneText = s.type === 'hearth'
+        ? who + 'hearth in the ' + where + ' is lit at last. Warmth has a home here.'
+        : who + 'lean-to in the ' + where + ' stands finished. The weather will have to try harder now.';
+      chronicle(w, 'discovery', doneText, doneId);
+      events.push({ kind: 'discovery', text: doneText });
     });
 
     /* -- where shelters ring a hearth and a tribe lives among them,
@@ -2727,6 +2794,8 @@
     skillName: skillName,
     buildStructure: buildStructure,
     ensureStructures: ensureStructures,
+    structRaised: structRaised,
+    BUILD_MS: BUILD_MS,
     wandererDue: wandererDue,
     wandererTick: wandererTick,
     almanacTick: almanacTick,
@@ -2734,6 +2803,7 @@
     modernKithGenome: modernKithGenome,
     isSwimmer: isSwimmer,
     canStandAt: canStandAt,
+    reachableStraight: reachableStraight,
     KITH_GENE_SPEC: KITH_GENE_SPEC,
     plantLabel: plantLabel,
     mergeWorlds: mergeWorlds,

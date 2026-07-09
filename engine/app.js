@@ -711,8 +711,19 @@
       parts.push('<circle class="ember-glow" cx="0" cy="-1.4" r="2.4" fill="#e8873a"/>');
       parts.push('<circle cx="0" cy="-1.6" r="1.1" fill="#ffd166"/>');
     }
-    return '<g class="structure" transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) +
-      ') scale(' + scale.toFixed(2) + ')">' + parts.join('') + '</g>';
+    // watch it rise: a build grows from the ground over its raising, faint and
+    // low at first, with a scatter of stems or stones at its foot until it stands
+    var raised = W.structRaised(s, vnow());
+    var body;
+    if (raised < 1) {
+      var grow = (0.12 + 0.88 * raised).toFixed(3);
+      body = '<ellipse cx="0" cy="1.6" rx="' + (11 - 6 * raised).toFixed(1) + '" ry="1.7" fill="rgba(120,108,86,0.4)"/>' +
+        '<g transform="scale(1 ' + grow + ')" opacity="' + (0.4 + 0.6 * raised).toFixed(2) + '">' + parts.join('') + '</g>';
+    } else {
+      body = parts.join('');
+    }
+    return '<g class="structure' + (raised < 1 ? ' rising' : '') + '" transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) +
+      ') scale(' + scale.toFixed(2) + ')">' + body + '</g>';
   }
 
   /* ---------- kith ---------- */
