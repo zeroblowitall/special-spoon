@@ -308,6 +308,15 @@ html, body {
 
 .lex-word { font-family: Georgia, serif; font-style: italic; font-size: 1.05rem; color: var(--accent); }
 
+/* Predators: the beast at the edge. Its eyes catch the light and its shadow
+ * breathes — a wrongness on the land you notice before you name it. */
+.predator { pointer-events: none; }
+.predator .pred-eye { filter: drop-shadow(0 0 2px currentColor); animation: predEye 1.6s ease-in-out infinite; }
+.predator .pred-aura { animation: predAura 3s ease-in-out infinite; }
+.predator.phase-after { transition: opacity 2s linear; }
+@keyframes predEye { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@keyframes predAura { 0%, 100% { opacity: 0.1; } 50% { opacity: 0.2; } }
+
 /* The panel's inner-life readout: the intention, and the pressures behind it */
 #panel .intent-now {
   margin: 0.35rem 0 0.5rem;

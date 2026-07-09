@@ -539,7 +539,8 @@
     seedkeeping: 'the way of seed-keeping',
     song: 'the song',
     shelter: 'the craft of shelter',
-    hearth: 'the keeping of hearths'
+    hearth: 'the keeping of hearths',
+    ward: 'the warding'
   };
 
   /* ---------- structures: what society raises ----------
@@ -1036,6 +1037,159 @@
         events.push(returnExpedition(w, k, now));
       }
     });
+  }
+
+  /* ---------- predators: the beast at the edge ----------
+   * The world grows teeth. Now and then a hunter comes — a thing suited to its
+   * country and its own dark craft: some drag the kith down into the water,
+   * some fall on them where they stand, some carry them off to feed their
+   * young. WHEN one comes and WHAT it is derive from world identity and time
+   * (like the weather); WHO it takes is chosen from stable content (the young,
+   * the old, the timid, the solitary, the unwatched), never from a copy's
+   * fleeting positions — so every copy suffers the same killing at the same
+   * hour, with the same deterministic id, and reunited worlds mourn once.
+   *
+   * This is where the world is allowed to be dark. (See ROADMAP Q2, revised.) */
+
+  var PRED_PERIOD = 11 * DAY;
+
+  var PREDATOR_KINDS = {
+    drowner:     { name: 'the drowner',        method: 'depths', look: 'serpent', tint: '#1d3a52', verb: 'uncoiled from the black water' },
+    reefjaws:    { name: 'the reef-jaws',      method: 'depths', look: 'serpent', tint: '#236b6f', verb: 'rose out of the bright shallows' },
+    deeplurker:  { name: 'the deep-lurker',    method: 'depths', look: 'shade',   tint: '#3a2b54', verb: 'reached up out of the ink' },
+    greatcat:    { name: 'the meadow-cat',     method: 'devour', look: 'prowler', tint: '#7a5a2f', verb: 'came low through the grass' },
+    ashhound:    { name: 'the ash-hound pack', method: 'devour', look: 'pack',    tint: '#6a3326', verb: 'poured out of the smoke' },
+    whitepack:   { name: 'the white pack',     method: 'devour', look: 'pack',    tint: '#8ea3b8', verb: 'ran it down across the snow' },
+    saltwyrm:    { name: 'the salt-wyrm',      method: 'devour', look: 'worm',    tint: '#9a8f6f', verb: 'burst up through the crust' },
+    glassstalker:{ name: 'the glass-stalker',  method: 'devour', look: 'prowler', tint: '#6f8f9a', verb: 'stepped out of the glare' },
+    skyraptor:   { name: 'the sky-raptor',     method: 'nest',   look: 'raptor',  tint: '#45456a', verb: 'stooped out of the cloud' },
+    broodmother: { name: 'the brood-mother',   method: 'nest',   look: 'raptor',  tint: '#5a3a4a', verb: 'swept down on wide wings' },
+    moorhound:   { name: 'the hound of the moor', method: 'nest', look: 'shade',  tint: '#39355a', verb: 'slipped out of the dusk' }
+  };
+  var REALM_PREDATORS = {
+    meadow:     ['greatcat', 'broodmother'],
+    lakewild:   ['drowner', 'reefjaws'],
+    mistral:    ['skyraptor', 'broodmother'],
+    ember:      ['ashhound'],
+    frostmere:  ['whitepack'],
+    fungal:     ['deeplurker', 'moorhound'],
+    saltflats:  ['saltwyrm'],
+    duskmoor:   ['moorhound', 'greatcat'],
+    coralshelf: ['reefjaws', 'drowner'],
+    glasswold:  ['glassstalker']
+  };
+
+  function predatorDue(worldId, t) {
+    var period = Math.floor(t / PRED_PERIOD);
+    var rng = mulberry32(hash32(worldId + ':pred:' + period));
+    if (rng() >= 0.4) return null; // most seasons pass without a hunter
+    var pool = REALM_PREDATORS[realmOf(worldId).key] || ['greatcat'];
+    var kind = pool[Math.floor(rng() * pool.length)];
+    var start = period * PRED_PERIOD + Math.floor(rng() * 9 * DAY);
+    var hunt = (6 + Math.floor(rng() * 11)) * 3600 * 1000; // six to sixteen hours prowling
+    var killAt = start + Math.floor(hunt * (0.3 + rng() * 0.5));
+    return {
+      id: 'prd' + hash32(worldId + ':pred:' + period).toString(16),
+      kind: kind, start: start, end: start + hunt, killAt: killAt, period: period
+    };
+  }
+
+  // A varied body, seeded from the hunt's own id — no two look quite alike.
+  function predatorGenome(id) {
+    var rng = mulberry32(hash32(id + ':look'));
+    return {
+      size: 1.8 + rng() * 1.9, hueShift: Math.floor(rng() * 46) - 23,
+      eyes: 1 + Math.floor(rng() * 3), spikes: Math.floor(rng() * 6),
+      elong: 0.75 + rng() * 1.0, teeth: 4 + Math.floor(rng() * 6), glow: rng() < 0.5
+    };
+  }
+
+  function predatorVuln(k, w, now, due) {
+    var stage = kithStage(k, now);
+    var v = (stage === 'young' ? 0.5 : stage === 'elder' ? 0.35 : 0) + (1 - k.brain.boldness) * 0.4;
+    var bonds = Object.keys(k.trust || {}).filter(function (id) {
+      return (k.trust[id] || 0) >= 0.5 && w.kith[id] && isAlive(w.kith[id]);
+    }).length;
+    if (bonds === 0) v += 0.25;                              // the solitary are taken first
+    if (knowsOf(k).indexOf('ward') > -1) v -= 0.5;           // a watcher is wary and hard to catch
+    v += (hash32(due.id + k.id) % 1000) / 3000;              // a little cruelty of chance
+    return v;
+  }
+
+  // The one it takes — chosen from CONTENT alone, so every copy agrees. A
+  // hunter comes only to a peopled world, not a tiny founding band.
+  function predatorVictim(w, due, now) {
+    var pool = presentKith(w).filter(function (k) { return !k.wanderer; });
+    if (pool.length < 4) return null;
+    pool.sort(function (a, b) {
+      return predatorVuln(b, w, now, due) - predatorVuln(a, w, now, due) || (a.id < b.id ? -1 : 1);
+    });
+    return pool[0];
+  }
+
+  // Does a defended world turn the beast back? Enough bold watchers can.
+  function predatorThwart(w, due) {
+    var guards = presentKith(w).filter(function (k) { return knowsOf(k).indexOf('ward') > -1; });
+    if (!guards.length) return null;
+    var strength = guards.reduce(function (s, k) { return s + Math.max(0, k.brain.boldness); }, 0);
+    var need = 1 + mulberry32(hash32(due.id + ':thwart'))() * 1.6; // 1.0–2.6
+    if (strength < need) return null;
+    return guards.slice().sort(function (a, b) { return b.brain.boldness - a.brain.boldness || (a.id < b.id ? -1 : 1); })[0];
+  }
+
+  function killByPredator(w, k, due, kind, events) {
+    k.passed = due.killAt;                    // the same hour in every copy
+    k.takenBy = { kind: due.kind, method: kind.method };
+    if (w.emissary === k.id) w.emissary = null;
+    k.u = bumpClock(w);
+    var Name = kind.name.charAt(0).toUpperCase() + kind.name.slice(1);
+    var text;
+    if (kind.method === 'depths') {
+      text = Name + ' ' + kind.verb + ' and took ' + kithLabel(k) + ' down thrashing into the dark. The water reddened, then closed, and gave nothing back.';
+    } else if (kind.method === 'nest') {
+      text = Name + ' ' + kind.verb + ', seized ' + kithLabel(k) + ' in its claws, and bore it off to its brood. The screaming carried a long way, and then it stopped.';
+    } else {
+      text = Name + ' ' + kind.verb + ' and tore into ' + kithLabel(k) + ' where it stood. When it had fed, there was little left for the world to bury.';
+    }
+    chronicle(w, 'predator', text, 'pk' + due.id);
+    events.push({ kind: 'predator', text: kithLabel(k) + ' was taken by ' + kind.name + '.' });
+  }
+
+  function predatorTick(w, now, events) {
+    var due = predatorDue(w.id, now);
+    if (!due || now < due.killAt || now > due.end) return;  // resolve only at the strike, within the hunt
+    if (w.chronicle.some(function (e) { return e.id === 'pk' + due.id; })) return; // already resolved
+    var victim = predatorVictim(w, due, now);
+    if (!victim) return;
+    var kind = PREDATOR_KINDS[due.kind] || PREDATOR_KINDS.greatcat;
+    var champion = predatorThwart(w, due);
+    if (champion) {
+      var Name = kind.name.charAt(0).toUpperCase() + kind.name.slice(1);
+      var offText = Name + ' ' + kind.verb + ' — but the folk stood together, and ' + kithLabel(champion) +
+        ' drove it back into the dark. No one was taken this time.';
+      chronicle(w, 'strife', offText, 'pk' + due.id);
+      events.push({ kind: 'ward', text: offText });
+      return;
+    }
+    killByPredator(w, victim, due, kind, events);
+  }
+
+  // A living portrait of the current hunter, for the eye above — pure, so it
+  // needs no stored state. Null when nothing stalks (or the world is too small
+  // to draw a hunter to it).
+  function predatorAt(w, now) {
+    var due = predatorDue(w.id, now);
+    if (!due || now < due.start || now > due.end) return null;
+    var victim = predatorVictim(w, due, now);
+    if (!victim) return null;
+    var kind = PREDATOR_KINDS[due.kind] || PREDATOR_KINDS.greatcat;
+    return {
+      id: due.id, kind: due.kind, name: kind.name, look: kind.look, method: kind.method, tint: kind.tint,
+      start: due.start, end: due.end, killAt: due.killAt,
+      phase: now < due.killAt ? 'stalking' : 'after',
+      resolved: w.chronicle.some(function (e) { return e.id === 'pk' + due.id; }),
+      victimId: victim.id, genome: predatorGenome(due.id)
+    };
   }
 
   /* ---------- the almanac ----------
@@ -1961,6 +2115,7 @@
     var events = checkMortality(w, now);
     wandererTick(w, now, events);
     expeditionTick(w, now, events);
+    predatorTick(w, now, events);
     var terrain = makeTerrain(w.id);
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
     var wxNow = weatherAt(w.id, now);
@@ -2458,6 +2613,25 @@
         keeperPlant(w, k, dayBucket);
       }
     });
+
+    /* -- the warding: after a killing, a bold and caring soul stops sleeping
+     * easy. It learns to keep the watch and to teach the folk to stand
+     * together when the dark things come. A world that has never been hunted
+     * has no reason to invent it. -- */
+    if (w.chronicle.some(function (e) { return e.kind === 'predator'; })) {
+      alive.forEach(function (k) {
+        if (knowsOf(k).indexOf('ward') > -1) return;
+        if (k.brain.boldness <= 0.6 || k.brain.sociability <= 0.55) return;
+        if (rng() >= 0.05) return;
+        var kin = alive.some(function (o) { return o.id !== k.id && Math.abs(o.x - k.x) < 0.12 && Math.abs(o.y - k.y) < 0.12; });
+        if (!kin) return;
+        learn(w, k, 'ward');
+        var wardText = 'After the killing, ' + kithLabel(k) + ' would not sleep easy. It began to keep the watch, ' +
+          'and to teach the others to stand together when the dark comes. It knows the warding now.';
+        chronicle(w, 'discovery', wardText, 'dw' + k.id);
+        events.push({ kind: 'discovery', text: wardText });
+      });
+    }
 
     /* -- builders build: a lean-to where none stands, a hearth among
      * shelters. One work per builder per day, identical in every copy -- */
@@ -2989,6 +3163,9 @@
     wandererTick: wandererTick,
     expeditionDue: expeditionDue,
     expeditionTick: expeditionTick,
+    predatorDue: predatorDue,
+    predatorAt: predatorAt,
+    predatorTick: predatorTick,
     presentKith: presentKith,
     almanacTick: almanacTick,
     almanacPages: almanacPages,

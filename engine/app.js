@@ -518,6 +518,7 @@
         '<circle class="beckon-ripple" r="6"/><circle class="beckon-ripple r2" r="6"/></g>');
     }
     svgParts.push('<g id="kith-layer">' + drawAllKith() + '</g>');
+    svgParts.push(drawPredator());
 
     // weather, painted over everything — and weather that CHANGES fades:
     // the old sky lingers a few seconds while the new one settles in
@@ -724,6 +725,111 @@
     }
     return '<g class="structure' + (raised < 1 ? ' rising' : '') + '" transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) +
       ') scale(' + scale.toFixed(2) + ')">' + body + '</g>';
+  }
+
+  /* ---------- predators: the beast at the edge ---------- */
+
+  // A ring of glowing eyes — how many, from the beast's own body.
+  function monsterEyes(count, cx, cy, eyeColor, glow) {
+    var out = [];
+    for (var i = 0; i < count; i++) {
+      var ex = cx + (i - (count - 1) / 2) * 3.2;
+      out.push('<circle cx="' + ex.toFixed(1) + '" cy="' + cy + '" r="1.7" fill="' + eyeColor + '"' +
+        (glow ? ' class="pred-eye"' : '') + '/>');
+    }
+    return out.join('');
+  }
+  function monsterTeeth(count, x0, x1, y) {
+    var out = [];
+    for (var i = 0; i < count; i++) {
+      var t = x0 + (x1 - x0) * (i / (count - 1 || 1));
+      out.push('<path d="M' + t.toFixed(1) + ' ' + y + ' l 1.1 3 l 1.1 -3 Z" fill="#f2efe6"/>');
+    }
+    return out.join('');
+  }
+
+  function monsterParts(look, g, tint) {
+    var dark = '#0c0e13';
+    var eye = g.glow ? '#9be7ff' : '#ff4b2b';
+    var spikes = [];
+    for (var s = 0; s < g.spikes; s++) {
+      var sx = -8 + s * (16 / Math.max(1, g.spikes));
+      spikes.push('<path d="M' + sx.toFixed(1) + ' -9 l 2 -5 l 2 5 Z" fill="' + dark + '"/>');
+    }
+    if (look === 'serpent') {
+      return '<ellipse cx="0" cy="1.5" rx="15" ry="2.6" fill="rgba(0,0,0,0.28)"/>' +
+        '<path d="M-15 2 Q -18 -14 -6 -16 Q 6 -18 8 -8 Q 9 -1 3 -2 Q -3 -3 -2 -9" fill="none" stroke="' + tint + '" stroke-width="' + (5 * g.elong).toFixed(1) + '" stroke-linecap="round"/>' +
+        '<path d="M4 -18 q 10 -2 13 6 q 1 5 -5 6 q -8 1 -9 -6 z" fill="' + tint + '" stroke="' + dark + '" stroke-width="1"/>' +
+        monsterTeeth(g.teeth, 8, 16, -8) +
+        monsterEyes(g.eyes, 12, -15, eye, g.glow) +
+        '<path d="M-6 -15 l -5 -6 l 6 2 z" fill="' + tint + '"/>'; // a fin
+    }
+    if (look === 'raptor') {
+      return '<ellipse cx="0" cy="1.5" rx="10" ry="2.4" fill="rgba(0,0,0,0.28)"/>' +
+        '<path d="M0 -10 L-22 -22 L-6 -12 Z" fill="' + tint + '" stroke="' + dark + '" stroke-width="1"/>' +
+        '<path d="M0 -10 L22 -22 L6 -12 Z" fill="' + tint + '" stroke="' + dark + '" stroke-width="1"/>' +
+        '<ellipse cx="0" cy="-9" rx="5.5" ry="7" fill="' + tint + '" stroke="' + dark + '" stroke-width="1"/>' +
+        '<path d="M0 -13 l 7 -3 l -7 -1 z" fill="#e8c06a" stroke="' + dark + '" stroke-width="0.6"/>' + // hooked beak
+        monsterEyes(g.eyes, 0, -12, eye, g.glow) +
+        '<path d="M-3 -2 l -1 4 M3 -2 l 1 4" stroke="' + dark + '" stroke-width="1.4"/>'; // talons
+    }
+    if (look === 'worm') {
+      var segs = [];
+      for (var i = 0; i < 4; i++) segs.push('<ellipse cx="0" cy="' + (-4 - i * 5) + '" rx="' + (7 - i) + '" ry="4" fill="' + tint + '" stroke="' + dark + '" stroke-width="0.8"/>');
+      return '<ellipse cx="0" cy="1.5" rx="9" ry="2.6" fill="rgba(0,0,0,0.3)"/>' +
+        '<path d="M-9 2 l 4 -3 l -3 3 l 4 -2 l -2 2 z" fill="' + dark + '"/>' + // broken crust
+        segs.join('') +
+        '<circle cx="0" cy="-25" r="6" fill="' + dark + '"/>' +
+        monsterTeeth(g.teeth, -5, 5, -28) +
+        monsterEyes(g.eyes, 0, -26, eye, g.glow);
+    }
+    if (look === 'shade') {
+      return '<ellipse cx="0" cy="1.5" rx="13" ry="3" fill="rgba(0,0,0,0.3)"/>' +
+        '<ellipse cx="0" cy="-8" rx="14" ry="11" fill="' + tint + '" opacity="0.5"/>' +
+        '<ellipse cx="0" cy="-9" rx="10" ry="9" fill="' + dark + '" opacity="0.8"/>' +
+        '<path d="M-10 0 q -4 6 -1 10 M9 0 q 4 6 1 10 M0 2 q 0 8 0 12" stroke="' + tint + '" stroke-width="1.6" fill="none" opacity="0.7"/>' +
+        monsterEyes(Math.max(2, g.eyes), 0, -11, eye, true);
+    }
+    // prowler (and pack uses this thrice)
+    var body = '<ellipse cx="0" cy="1.5" rx="12" ry="2.6" fill="rgba(0,0,0,0.28)"/>' +
+      '<path d="M-11 -3 q 3 -7 11 -6 q 8 1 10 6 q -2 4 -10 4 q -9 0 -11 -4 z" fill="' + tint + '" stroke="' + dark + '" stroke-width="1"/>' +
+      spikes.join('') +
+      '<path d="M8 -4 q 8 -1 9 4 q -1 4 -6 3 q -5 -1 -3 -7 z" fill="' + tint + '" stroke="' + dark + '" stroke-width="1"/>' + // head
+      monsterTeeth(g.teeth, 9, 16, 1) +
+      monsterEyes(g.eyes, 13, -3, eye, g.glow) +
+      '<path d="M-9 1 l -1 5 M-4 2 l 0 5 M4 2 l 0 5 M9 1 l 1 5" stroke="' + dark + '" stroke-width="1.6"/>' + // legs
+      '<path d="M-11 -2 q -6 -2 -8 2" stroke="' + tint + '" stroke-width="2" fill="none"/>'; // tail
+    return body;
+  }
+
+  function drawPredator() {
+    var pred = W.predatorAt(state, vnow());
+    if (!pred) return '';
+    var v = state.kith[pred.victimId];
+    var vx = v ? v.x : 0.5, vy = v ? v.y : 0.72;
+    var now = vnow();
+    var g = pred.genome;
+    var px, py = vy, alpha = 1;
+    if (pred.phase === 'stalking') {
+      var span = Math.max(1, pred.killAt - pred.start);
+      var prog = Math.max(0, Math.min(1, (now - pred.start) / span));
+      var fromX = vx < 0.5 ? 0.0 : 1.0;
+      px = fromX + (vx - fromX) * (0.15 + 0.85 * prog); // it creeps in and closes on the prey
+    } else {
+      var span2 = Math.max(1, pred.end - pred.killAt);
+      var prog2 = Math.max(0, Math.min(1, (now - pred.killAt) / span2));
+      var edgeX = vx < 0.5 ? 0.0 : 1.0;
+      px = vx + (edgeX - vx) * prog2; // after the strike it withdraws, and fades
+      alpha = 1 - 0.7 * prog2;
+    }
+    var pos = toScreen(px, py);
+    var facing = (vx - px) >= 0 ? 1 : -1;
+    var scale = (0.85 + (py - 0.55) * 0.9) * g.size;
+    var parts = monsterParts(pred.look, g, pred.tint);
+    return '<g class="predator phase-' + pred.phase + '" opacity="' + alpha.toFixed(2) + '" ' +
+      'transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')">' +
+      '<ellipse class="pred-aura" cx="0" cy="-6" rx="' + (26 * g.size).toFixed(0) + '" ry="' + (16 * g.size).toFixed(0) + '" fill="' + pred.tint + '" opacity="0.14"/>' +
+      '<g transform="scale(' + (scale * facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' + parts + '</g></g>';
   }
 
   /* ---------- kith ---------- */
@@ -1001,12 +1107,16 @@
     var ageText = days < 1 ? 'born today' : days + (days === 1 ? ' day' : ' days') + ' old';
 
     if (k.passed) {
-      var restText = k.lostBeyond
-        ? 'walked out past the edge of the world, and did not come home'
+      var takenMethod = k.takenBy ? k.takenBy.method : null;
+      var restText = takenMethod === 'depths' ? 'was dragged down into the dark water, and never surfaced'
+        : takenMethod === 'nest' ? 'was carried off by a beast, and did not come back'
+        : takenMethod === 'devour' ? 'was killed by a beast where it stood'
+        : k.lostBeyond ? 'walked out past the edge of the world, and did not come home'
         : 'fell asleep beneath the soil';
+      var speciesLine = k.takenBy ? 'taken by a predator' : k.lostBeyond ? 'lost beyond the edge' : 'remembered';
       return '<div id="panel">' +
         '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
-        '<div class="species">' + (k.lostBeyond ? 'lost beyond the edge' : 'remembered') + '</div>' +
+        '<div class="species">' + speciesLine + '</div>' +
         '<div class="meta">lived ' + Math.max(1, Math.round((k.passed - k.born) / 86400000)) + ' days · ' + restText + '</div>' +
         (k.bornOfMerge ? '<div class="hybrid-note">✦ Was born of the meeting of ' + escapeHtml(k.bornOfMerge.worlds[0]) + ' and ' + escapeHtml(k.bornOfMerge.worlds[1]) + '.</div>' : '') +
         '<div class="row"><button class="btn" data-act="close-panel">Close</button></div></div>';
@@ -1067,6 +1177,7 @@
     if (W.knowsOf(k).indexOf('song') > -1) skills.push('a singer: it sings against the storms');
     if (W.knowsOf(k).indexOf('shelter') > -1) skills.push('a builder: it raises shelters');
     if (W.knowsOf(k).indexOf('hearth') > -1) skills.push('a hearth-keeper: warmth follows it');
+    if (W.knowsOf(k).indexOf('ward') > -1) skills.push('a watcher: it keeps the watch against the dark');
     (k.relics || []).forEach(function (r) { skills.push('carries ' + escapeHtml(r.name) + ', from beyond the edge'); });
     if (k.scars) skills.push(k.scars === 1 ? 'bears a scar from the far country' : 'bears the scars of hard travels');
     var skillLine = skills.length ? skills.join(' · ') : null;
@@ -1184,7 +1295,7 @@
         var traits = [];
         if (state.emissary === k.id) traits.push('emissary');
         if (W.isSwimmer(k)) traits.push('swimmer');
-        W.knowsOf(k).forEach(function (s) { traits.push({ seedkeeping: 'seed-keeper', song: 'singer', shelter: 'builder', hearth: 'hearth-keeper' }[s] || s); });
+        W.knowsOf(k).forEach(function (s) { traits.push({ seedkeeping: 'seed-keeper', song: 'singer', shelter: 'builder', hearth: 'hearth-keeper', ward: 'watcher' }[s] || s); });
         if (k.relics && k.relics.length) traits.push('far-traveller');
         if (k.scars) traits.push('scarred');
         var doing = away ? '<br><span class="muted">it went looking for what lies past the map</span>'
@@ -1710,7 +1821,9 @@
     // when the light turns (dawn, dusk, nightfall) the whole scene is
     // repainted so the sky keeps pace — vital under warp, cheap at rest
     var phaseNow = W.dayPhase(vnow());
-    if (!openModal && phaseNow !== lastDayPhase) {
+    // while a hunter stalks, repaint every beat so the beast moves; otherwise
+    // repaint only when the light turns, and glide the kith between times
+    if (!openModal && (phaseNow !== lastDayPhase || W.predatorAt(state, vnow()))) {
       lastDayPhase = phaseNow;
       render();
     } else if (!openModal) {

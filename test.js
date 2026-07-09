@@ -1556,6 +1556,82 @@ if (due) {
 }
 fakeNow = savedExpNow;
 
+/* ---------- 28. predators: the beast at the edge ---------- */
+
+console.log('predators');
+const PDAY = 86400000;
+const savedPredNow = fakeNow;
+// find a world with a hunt on its calendar
+let predWorld = null, hunt = null;
+for (let i = 0; i < 400 && !hunt; i++) {
+  const cand = W.newWorld();
+  for (let p = 1200; p < 1245 && !hunt; p++) {
+    const d = W.predatorDue(cand.id, p * 11 * PDAY + 2 * PDAY);
+    if (d) { predWorld = cand; hunt = d; }
+  }
+}
+check('a hunter is on some world\'s calendar', !!hunt);
+check('the hunt is a pure function of world and time', !!hunt &&
+  JSON.stringify(W.predatorDue(predWorld.id, hunt.start)) === JSON.stringify(W.predatorDue(predWorld.id, hunt.start)));
+check('the kind of beast suits its realm', !!hunt && typeof hunt.kind === 'string' && hunt.killAt > hunt.start && hunt.killAt < hunt.end);
+
+if (hunt) {
+  // give the world a proper population of grown, catchable folk
+  fakeNow = hunt.killAt;
+  const roster = Object.values(predWorld.kith);
+  // ensure at least four present kith
+  while (Object.keys(predWorld.kith).length < 5) {
+    const base = roster[0];
+    const nid = 'extra' + Object.keys(predWorld.kith).length;
+    const copy = clone(base); copy.id = nid; copy.given = nid;
+    predWorld.kith[nid] = copy;
+  }
+  Object.values(predWorld.kith).forEach(k => {
+    k.born = hunt.killAt - 4 * PDAY; k.span = 16; k.passed = null; k.departed = null; delete k.expedition;
+    k.brain.boldness = 0.3; // timid, catchable, and no warders
+  });
+  predWorld.emissary = null;
+
+  // a hunter appears to a peopled world
+  check('a hunter appears when it should', !!W.predatorAt(predWorld, hunt.start));
+  check('no hunter comes to too small a world', (() => {
+    const tiny = clone(predWorld); tiny.kith = { a: clone(roster[0]) };
+    return W.predatorAt(tiny, hunt.start) === null;
+  })());
+
+  const twinPred = clone(predWorld);
+  W.predatorTick(predWorld, hunt.killAt, []);
+  const taken = Object.values(predWorld.kith).filter(k => k.passed && k.takenBy);
+  check('the beast takes one of the folk', taken.length === 1);
+  check('the killing is chronicled once, darkly', predWorld.chronicle.filter(e => e.id === 'pk' + hunt.id).length === 1 &&
+    predWorld.chronicle.some(e => e.id === 'pk' + hunt.id && e.kind === 'predator'));
+  check('how it was taken is remembered', taken.length === 1 && ['depths', 'devour', 'nest'].indexOf(taken[0].takenBy.method) > -1);
+
+  // determinism: the same soul is taken in every copy
+  W.predatorTick(twinPred, hunt.killAt, []);
+  const taken2 = Object.values(twinPred.kith).filter(k => k.passed && k.takenBy);
+  check('the same soul is taken in every copy', taken.length === 1 && taken2.length === 1 && taken2[0].id === taken[0].id);
+
+  // it does not kill twice for the same hunt
+  W.predatorTick(predWorld, hunt.killAt + 3600000, []);
+  check('one hunt, one killing', predWorld.chronicle.filter(e => e.id === 'pk' + hunt.id).length === 1);
+
+  // reunited copies mourn once
+  const mergedPred = clone(predWorld);
+  W.mergeWorlds(mergedPred, clone(twinPred));
+  check('reunited copies mourn the killing once', mergedPred.chronicle.filter(e => e.id === 'pk' + hunt.id).length === 1);
+
+  // the warding: a defended world turns the beast back
+  const wardWorld = clone(twinPred);
+  Object.values(wardWorld.kith).forEach(k => { k.passed = null; k.takenBy = null; k.knows = ['ward']; k.brain.boldness = 0.9; });
+  wardWorld.chronicle = wardWorld.chronicle.filter(e => e.id !== 'pk' + hunt.id);
+  W.predatorTick(wardWorld, hunt.killAt, []);
+  check('a well-warded world drives the beast off', Object.values(wardWorld.kith).every(k => !k.passed));
+  check('and the standing-off is chronicled once', wardWorld.chronicle.filter(e => e.id === 'pk' + hunt.id).length === 1 &&
+    wardWorld.chronicle.some(e => e.id === 'pk' + hunt.id && e.kind === 'strife'));
+}
+fakeNow = savedPredNow;
+
 /* ---------- summary ---------- */
 
 console.log('');
