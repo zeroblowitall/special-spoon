@@ -1484,6 +1484,19 @@
     return { key: SEASONS[((index % 4) + 4) % 4], index: index };
   }
 
+  /* ---------- day & night ----------
+   * The hour of the local clock, shared by the sky and by the kith: the
+   * world sleeps roughly when its keeper does. Night behaviour is ephemeral
+   * (never clocked, never merged), so it needs no cross-copy agreement. */
+  function dayPhase(t) {
+    var h = new Date(t).getHours();
+    if (h >= 21 || h < 5) return 'night';
+    if (h < 8) return 'dawn';
+    if (h < 18) return 'day';
+    return 'dusk';
+  }
+  function isNight(t) { return dayPhase(t) === 'night'; }
+
   // Effective growing-hours between two moments: the season multiplier
   // integrated EXACTLY across every boundary, so growth is identical no
   // matter how often (or when) a copy of the world samples it.
@@ -1717,6 +1730,7 @@
     var wxNow = weatherAt(w.id, now);
     var storm = wxNow.kind === 'storm';
     var winter = wxNow.season === 'winter';
+    var night = isNight(now);
     var call = (beacon && now < beacon.until) ? beacon : null;
     var alive = livingKith(w);
     var blooming = Object.keys(w.plants).map(function (id) { return w.plants[id]; })
@@ -1731,6 +1745,7 @@
       if (k.act === 'shelter' && structList.some(function (s) {
         return s.type === 'leanto' && structDist(s, k.x, k.y) < 0.07;
       })) decayMul = 0.6; // a roof is worth more than a rock
+      if (k.act === 'sleep') decayMul = 0; // the sleeping do not tire; they mend
       var decay = ENERGY_DECAY_PER_SEC * decayMul * dt;
       k.energy = Math.max(0, k.energy - decay);
       if (k.energy <= 0 && !k.starving) k.starving = now;
@@ -1776,6 +1791,30 @@
           k.act = 'wander'; k.eating = null; k.tx = null;
         }
         return; // stay put while sipping
+      }
+      if (k.act === 'sleep') {
+        // wake at dawn, when a storm breaks, or if hunger grows sharp
+        if (!night || storm || k.energy < 0.25) {
+          k.act = 'wander'; k.tx = null;
+          // a waking word at first light — the beginnings of a dawn chorus
+          if (!night && rng() < 0.5) {
+            var glad = attendConcept(w, k, 'mark:good');
+            k.saying = glad.word; k.sayingUntil = now + 3000;
+          }
+        } else {
+          // safe sleep mends faster: a roof, a hearth, or kin close by
+          var sheltered = structList.some(function (s) { return structDist(s, k.x, k.y) < 0.09; });
+          k.energy = Math.min(1, k.energy + ENERGY_DECAY_PER_SEC * (sheltered ? 3 : 1.4) * dt);
+          // dreams: a remembered word murmured into the dark
+          if (rng() < 0.04) {
+            var vocab = Object.keys(k.lex || {}).filter(function (c) { return c !== ':order'; });
+            if (vocab.length) {
+              var dream = k.lex[vocab[Math.floor(rng() * vocab.length)]];
+              k.saying = dream.word + '…'; k.sayingUntil = now + 3200;
+            }
+          }
+          return;
+        }
       }
       if (k.act === 'rest' || k.act === 'shelter') {
         if (k.act === 'shelter' && !storm) { k.act = 'wander'; k.tx = null; }
@@ -1837,6 +1876,20 @@
           k.tx = refuge.x; k.ty = refuge.y;
         } else {
           k.act = 'shelter'; k.tx = null;
+          return;
+        }
+      } else if (night && k.energy > 0.35 && brain.boldness < 0.8) {
+        // night falls: seek a bed — a shelter or a hearth if one is near,
+        // else a safe spot underfoot — and sleep. The boldest roam the dark.
+        var bed = null, bedD = 0.4;
+        structList.forEach(function (s) {
+          var d = structDist(s, k.x, k.y);
+          if (d < bedD) { bedD = d; bed = s; }
+        });
+        if (bed && (Math.abs(bed.x - k.x) > 0.02 || Math.abs(bed.y - k.y) > 0.02)) {
+          k.tx = bed.x; k.ty = bed.y;
+        } else {
+          k.act = 'sleep'; k.tx = null;
           return;
         }
       } else if (hungerUrge > 0.45 && blooming.length > 0) {
@@ -2591,6 +2644,8 @@
     weatherAt: weatherAt,
     weatherTick: weatherTick,
     seasonAt: seasonAt,
+    dayPhase: dayPhase,
+    isNight: isNight,
     growingHours: growingHours,
     newWorld: newWorld,
     looksLikeWorld: looksLikeWorld,

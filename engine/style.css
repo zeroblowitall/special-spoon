@@ -74,6 +74,27 @@ html, body {
   transition: transform 0.5s ease;
 }
 .kith-group.act-rest .pose { transform: scale(1.04, 0.88) translateY(1px); }
+.kith-group.act-sleep .pose { transform: scale(1.1, 0.76) translateY(2px); }
+.kith-group.act-sleep .kith-bob { animation: none; }
+.kith-z {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 10px;
+  fill: #cfd8dd;
+  opacity: 0;
+  paint-order: stroke;
+  stroke: rgba(10, 14, 11, 0.5);
+  stroke-width: 2px;
+  pointer-events: none;
+}
+.kith-group.act-sleep .kith-z {
+  opacity: 0.9;
+  animation: zdrift 2.8s ease-in-out infinite;
+}
+@keyframes zdrift {
+  0% { transform: translateY(0); opacity: 0; }
+  30% { opacity: 0.9; }
+  100% { transform: translateY(-6px); opacity: 0; }
+}
 .kith-group.act-shelter .pose { transform: scale(1.1, 0.74) translateY(2px); }
 .kith-group.act-eat .pose { transform: rotate(6deg) scale(1, 0.96); }
 .kith-group.moving .pose { animation: waddle 0.55s ease-in-out infinite alternate; }

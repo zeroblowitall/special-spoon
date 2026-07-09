@@ -97,6 +97,7 @@
   var openModal = null;  // 'merge' | 'chronicle' | 'about' | 'worlds' | 'lexicon' | 'families' | null
   var lastWxKind = null; // re-render when the weather turns
   var wxPrev = null;     // the sky we are fading away from
+  var lastDayPhase = null; // re-render when the light turns (dawn/day/dusk/night)
   var beacon = null;     // { x, y, until } — the player's soft call; never saved
   var chronicleShowAll = false; // long histories start folded
   var lastSayings = {};         // per-kith last spoken line, for chirp timing
@@ -461,7 +462,7 @@
 
   function skyColors() {
     var sky = REALM_SKY[W.realmOf(state.id).key] || REALM_SKY.meadow;
-    var h = new Date().getHours();
+    var h = new Date(vnow()).getHours(); // follows the warp clock, so night cycles
     function slot(t, warm) {
       // between night and day, warmed toward the horizon fire at the edges
       return [
@@ -833,7 +834,7 @@
     var eyeY = (cy - ry * 0.28).toFixed(1);
     var eyeXs = g.eyes === 1 ? [0] : g.eyes === 2 ? [-3, 3] : g.eyes === 3 ? [-4, 0, 4] : [-4.5, -1.5, 1.5, 4.5];
     eyeXs.forEach(function (ex) {
-      if (k.act === 'rest') {
+      if (k.act === 'rest' || k.act === 'sleep') {
         parts.push('<path d="M' + (ex - 1.6) + ' ' + eyeY + ' q 1.6 1.5 3.2 0" stroke="#222" stroke-width="1" fill="none"/>');
       } else {
         parts.push('<circle cx="' + ex + '" cy="' + eyeY + '" r="1.8" fill="#fff"/>' +
@@ -865,6 +866,9 @@
     var haloSel = sel ? '<circle cx="0" cy="-6" r="16" fill="none" stroke="#ffd166" stroke-width="2" opacity="0.9"/>' : '';
     var haloEmissary = emissary ? '<circle cx="0" cy="-6" r="13" fill="none" stroke="#ffd166" stroke-width="1" stroke-dasharray="2 3" opacity="0.85" class="emissary-ring"/>' : '';
     var haloWanderer = k.wanderer ? '<circle cx="0" cy="-6" r="14" fill="none" stroke="#cfd8dd" stroke-width="1" stroke-dasharray="1 4" opacity="0.8" class="wanderer-ring"/>' : '';
+    // a sleeping "z" — always present, shown only by the act-sleep class so
+    // the cheap incremental update can reveal it without a full re-render
+    var zSvg = '<text class="kith-z" x="' + (rx * scale + 2).toFixed(0) + '" y="' + (-(-top + 4) * scale).toFixed(0) + '">z</text>';
 
     return '<g class="kith-group' + (sel ? ' selected' : '') + ' act-' + k.act + (inWater ? ' swimming' : '') + '" data-kith="' + k.id + '" ' +
       'style="transition: transform ' + (KITH_TICK_MS / 1000 + 0.2) + 's linear" ' +
@@ -875,7 +879,7 @@
       '<g class="pose">' +
       '<g transform="translate(0 ' + (inWater ? 3.5 : 0) + ') scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
       parts.join('') +
-      '</g></g></g>' + labelSvg + speechSvg + '</g>';
+      '</g></g></g>' + zSvg + labelSvg + speechSvg + '</g>';
   }
 
   // Between full renders, glide the kith to their new positions cheaply.
@@ -896,6 +900,7 @@
       node.classList.toggle('act-rest', k.act === 'rest');
       node.classList.toggle('act-shelter', k.act === 'shelter');
       node.classList.toggle('act-eat', k.act === 'eat');
+      node.classList.toggle('act-sleep', k.act === 'sleep');
       var speech = node.querySelector('.kith-speech');
       if (speech) {
         var line = (k.saying && k.sayingUntil && now < k.sayingUntil) ? k.saying : '';
@@ -1641,7 +1646,15 @@
       save();
       announceNews(events);
     }
-    if (!openModal) updateKithLayer();
+    // when the light turns (dawn, dusk, nightfall) the whole scene is
+    // repainted so the sky keeps pace — vital under warp, cheap at rest
+    var phaseNow = W.dayPhase(vnow());
+    if (!openModal && phaseNow !== lastDayPhase) {
+      lastDayPhase = phaseNow;
+      render();
+    } else if (!openModal) {
+      updateKithLayer();
+    }
     // a sheltering singer sings, note by note
     if (lastWxKind === 'storm') {
       var singer = W.livingKith(state).filter(function (k) {

@@ -1204,6 +1204,62 @@ W.mergeWorlds(bookMerged, clone(bookTwin));
 check('the earliest telling of a page wins the merge', bookMerged.almanac['hand-seed'].note === 'the earlier telling');
 check('pages already written are not lost to a merge', !!bookMerged.almanac['named-kith']);
 
+/* ---------- 20j. night & dreams ---------- */
+
+console.log('night & dreams');
+check('day and night are a pure function of the clock',
+  W.dayPhase(fakeNow) === W.dayPhase(fakeNow) &&
+  ['night', 'dawn', 'day', 'dusk'].indexOf(W.dayPhase(fakeNow)) > -1);
+
+// find a storm-free night, and a day, for a fresh world
+let nightWorld = W.newWorld();
+let nightT = null, dayT = null;
+for (let h = 0; h < 400 && (nightT === null || dayT === null); h++) {
+  const t = fakeNow + h * 3600 * 1000;
+  if (nightT === null && W.isNight(t) && W.weatherAt(nightWorld.id, t).kind !== 'storm') nightT = t;
+  if (dayT === null && W.dayPhase(t) === 'day' && W.weatherAt(nightWorld.id, t).kind !== 'storm') dayT = t;
+}
+check('night can be found on the clock', nightT !== null && W.isNight(nightT));
+
+// a land spot for the sleeper
+const nTerrain = W.makeTerrain(nightWorld.id);
+let landSpot = { x: 0.5, y: 0.8 };
+outerNight:
+for (let r = 8; r < 48; r++) for (let c = 8; c < 112; c++) {
+  const x = (c + 0.5) / 120, y = 0.55 + (r + 0.5) / 56 * 0.45;
+  if (W.isLandAt(nTerrain, x, y)) { landSpot = { x, y }; break outerNight; }
+}
+
+fakeNow = nightT;
+const dreamer = Object.values(nightWorld.kith)[0];
+dreamer.brain.boldness = 0.3; dreamer.energy = 0.8;
+dreamer.act = 'wander'; dreamer.tx = null; dreamer.ty = null;
+dreamer.x = landSpot.x; dreamer.y = landSpot.y;
+W.kithTick(nightWorld, 2);
+check('at night, the calm bed down to sleep', nightWorld.kith[dreamer.id].act === 'sleep');
+
+// the sleeping mend rather than tire
+nightWorld.kith[dreamer.id].energy = 0.5;
+for (let t = 0; t < 5; t++) W.kithTick(nightWorld, 2);
+check('the sleeping mend, not tire', nightWorld.kith[dreamer.id].energy >= 0.5);
+
+// the bold roam the dark
+const owl = Object.values(nightWorld.kith)[1];
+owl.brain.boldness = 0.95; owl.energy = 0.8;
+owl.act = 'wander'; owl.tx = null; owl.ty = null;
+owl.x = landSpot.x; owl.y = landSpot.y;
+let owlSlept = false;
+for (let t = 0; t < 8 && !owlSlept; t++) {
+  W.kithTick(nightWorld, 2);
+  if (nightWorld.kith[owl.id].act === 'sleep') owlSlept = true;
+}
+check('the bold roam the dark instead of sleeping', !owlSlept);
+
+// they wake by day
+fakeNow = dayT;
+W.kithTick(nightWorld, 2);
+check('the sleeping wake when day comes', nightWorld.kith[dreamer.id].act !== 'sleep');
+
 /* ---------- 21. song ---------- */
 
 console.log('song');
