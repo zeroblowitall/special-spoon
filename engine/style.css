@@ -317,6 +317,22 @@ html, body {
 @keyframes predEye { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 @keyframes predAura { 0%, 100% { opacity: 0.1; } 50% { opacity: 0.2; } }
 
+/* Catastrophe: the world turned antagonist. Overlays paint over the scene;
+ * the quake shakes the whole frame. */
+.cata-wave.is-strike { animation: cataWaveSwell 3.5s ease-in-out infinite; }
+.cata-crest { animation: cataCrest 2.4s linear infinite; }
+.cata-flame { transform-origin: center bottom; animation: cataFlame 0.5s ease-in-out infinite alternate; }
+.cata-ash { animation: cataFall 4s linear infinite; }
+.cata-snowfall { animation: cataFall 3s linear infinite; }
+#world.cata-shake.cata-strike { animation: cataQuake 0.14s steps(2) infinite; }
+@keyframes cataWaveSwell { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-26px); } }
+@keyframes cataCrest { 0% { transform: translateX(-300px); } 100% { transform: translateX(0); } }
+@keyframes cataFlame { from { transform: scaleY(0.8); } to { transform: scaleY(1.25); } }
+@keyframes cataFall { from { transform: translateY(-60px); } to { transform: translateY(180px); } }
+@keyframes cataQuake { 0% { transform: translate(0, 0); } 25% { transform: translate(-3px, 2px); } 50% { transform: translate(3px, -2px); } 75% { transform: translate(-2px, -3px); } 100% { transform: translate(2px, 3px); } }
+#topbar .alarm { color: var(--bad); font-weight: 600; animation: alarmPulse 1.1s ease-in-out infinite; }
+@keyframes alarmPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
 /* The panel's inner-life readout: the intention, and the pressures behind it */
 #panel .intent-now {
   margin: 0.35rem 0 0.5rem;

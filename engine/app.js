@@ -566,9 +566,12 @@
     if (wxPrev && wxPrev.kind && Date.now() < wxPrev.until) {
       svgParts.push(weatherLayersSvg(wxPrev.kind, 'wx-exit'));
     }
+    var disNow = W.disasterAt(state.id, vnow());
+    svgParts.push(drawDisaster(disNow));
+    var disClass = disNow ? ' cata-active cata-' + disNow.visual + ' cata-' + disNow.phase : '';
 
     stage.innerHTML =
-      '<svg id="world" class="wx-' + wx.kind + ' realm-' + W.realmOf(state.id).key + '" viewBox="' + camViewBox() + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="The garden">' +
+      '<svg id="world" class="wx-' + wx.kind + ' realm-' + W.realmOf(state.id).key + disClass + '" viewBox="' + camViewBox() + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="The garden">' +
       svgParts.join('') + '</svg>' +
       '<div id="cam-controls">' +
       '<button class="btn small" data-cam="in" title="Zoom in">+</button>' +
@@ -832,6 +835,56 @@
       '<g transform="scale(' + (scale * facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' + parts + '</g></g>';
   }
 
+  /* ---------- catastrophe: the world turned antagonist ---------- */
+
+  function drawDisaster(dis) {
+    if (!dis) return '';
+    var strike = dis.phase === 'strike';
+    var v = dis.visual;
+    var parts = [];
+    if (strike) parts.push('<rect x="-800" y="-800" width="2600" height="2600" fill="#100a06" opacity="0.22" pointer-events="none"/>');
+    if (v === 'wave') {
+      var lvl = strike ? 640 : 900; // the water climbs at the strike
+      parts.push('<g class="cata-wave ' + (strike ? 'is-strike' : 'is-warn') + '" pointer-events="none">' +
+        '<rect x="-800" y="' + lvl + '" width="2600" height="1400" fill="#2a6b8f" opacity="' + (strike ? 0.42 : 0.15) + '"/>' +
+        '<path class="cata-crest" d="M-800 ' + lvl + ' q 300 -55 600 0 t 600 0 t 600 0 t 600 0 t 600 0" fill="none" stroke="#cdeaf6" stroke-width="6" opacity="0.7"/></g>');
+    } else if (v === 'fire') {
+      var flames = [];
+      var frng = W.mulberry32(W.hash32(dis.id + ':fire'));
+      for (var i = 0; i < 24; i++) {
+        var fx = frng() * 1000;
+        flames.push('<path class="cata-flame" style="animation-delay:-' + (frng() * 1.2).toFixed(2) + 's" d="M' + fx.toFixed(0) +
+          ' 1010 q -9 -46 0 -78 q 9 32 0 78 Z" fill="#ff7a1a"/>');
+      }
+      parts.push('<g class="cata-fire ' + (strike ? 'is-strike' : 'is-warn') + '" pointer-events="none">' +
+        '<rect x="-800" y="-800" width="2600" height="1500" fill="#3a1505" opacity="' + (strike ? 0.2 : 0.06) + '"/>' +
+        '<rect x="-800" y="840" width="2600" height="500" fill="#c23a10" opacity="' + (strike ? 0.4 : 0.13) + '"/>' + flames.join('') + '</g>');
+    } else if (v === 'ash') {
+      var ash = [];
+      var arng = W.mulberry32(W.hash32(dis.id + ':ash'));
+      for (var a = 0; a < 44; a++) {
+        ash.push('<circle class="cata-ash" style="animation-delay:-' + (arng() * 3).toFixed(2) + 's" cx="' + (arng() * 1000).toFixed(0) +
+          '" cy="' + (arng() * 1000).toFixed(0) + '" r="' + (1 + arng() * 2).toFixed(1) + '" fill="#8a8078"/>');
+      }
+      parts.push('<g class="cata-ashfall ' + (strike ? 'is-strike' : 'is-warn') + '" pointer-events="none">' +
+        '<rect x="-800" y="-800" width="2600" height="2600" fill="#2a241f" opacity="' + (strike ? 0.36 : 0.14) + '"/>' + ash.join('') + '</g>');
+    } else if (v === 'snow') {
+      var sn = [];
+      var srng = W.mulberry32(W.hash32(dis.id + ':snow'));
+      for (var s2 = 0; s2 < 52; s2++) {
+        sn.push('<circle class="cata-snowfall" style="animation-delay:-' + (srng() * 2).toFixed(2) + 's" cx="' + (srng() * 1000).toFixed(0) +
+          '" cy="' + (srng() * 1000).toFixed(0) + '" r="' + (1.5 + srng() * 2).toFixed(1) + '" fill="#eef4fb"/>');
+      }
+      parts.push('<g class="cata-snow ' + (strike ? 'is-strike' : 'is-warn') + '" pointer-events="none">' +
+        (strike ? '<rect x="-800" y="-800" width="2600" height="1400" fill="#dfe9f2" opacity="0.32"/>' : '') + sn.join('') + '</g>');
+    } else if (v === 'shake' && strike) {
+      parts.push('<g class="cata-quake" pointer-events="none">' +
+        '<path d="M120 980 l 60 -34 l 40 22 l 80 -26 l 50 18" stroke="#0c0a08" stroke-width="4" fill="none" opacity="0.5"/>' +
+        '<path d="M560 998 l 50 -22 l 70 16 l 40 -20 l 60 14" stroke="#0c0a08" stroke-width="4" fill="none" opacity="0.5"/></g>');
+    }
+    return parts.join('');
+  }
+
   /* ---------- kith ---------- */
 
   function drawAllKith() {
@@ -1053,8 +1106,10 @@
       notes.push(wxNow.label + WX_VERBS[lastWxKind]);
     }
     var gen = notes.length ? ' <span class="gen">· ' + notes.join(' · ') + '</span>' : '';
+    var disNow = W.disasterAt(state.id, vnow());
+    var alarm = disNow ? ' <span class="alarm">⚠ ' + (disNow.phase === 'warning' ? disNow.name + ' is coming' : disNow.name + ' — run!') + '</span>' : '';
     return '<div id="topbar">' +
-      '<button id="world-name" title="Rename this world">' + escapeHtml(state.name) + gen + '</button>' +
+      '<button id="world-name" title="Rename this world">' + escapeHtml(state.name) + gen + alarm + '</button>' +
       '<div class="bar-actions">' +
       '<button class="btn primary" data-act="plant">Plant a seed</button>' +
       '<button class="btn" data-act="merge">Merge worlds…</button>' +
@@ -1108,12 +1163,15 @@
 
     if (k.passed) {
       var takenMethod = k.takenBy ? k.takenBy.method : null;
+      var lostType = k.lostTo ? k.lostTo.type : null;
+      var CATA_END = { tsunami: 'was taken by the sea when the great wave came', flood: 'was lost when the waters rose', wildfire: 'was caught by the fire in the dry country', eruption: 'was lost when the fire-mountain woke', avalanche: 'lies under the snow the mountain let go', quake: 'was lost when the ground itself came apart' };
       var restText = takenMethod === 'depths' ? 'was dragged down into the dark water, and never surfaced'
         : takenMethod === 'nest' ? 'was carried off by a beast, and did not come back'
         : takenMethod === 'devour' ? 'was killed by a beast where it stood'
+        : lostType ? CATA_END[lostType] || 'was lost to the turning of the world'
         : k.lostBeyond ? 'walked out past the edge of the world, and did not come home'
         : 'fell asleep beneath the soil';
-      var speciesLine = k.takenBy ? 'taken by a predator' : k.lostBeyond ? 'lost beyond the edge' : 'remembered';
+      var speciesLine = k.takenBy ? 'taken by a predator' : k.lostTo ? 'lost to ' + (k.lostTo.type === 'quake' ? 'the earthquake' : 'the ' + k.lostTo.type) : k.lostBeyond ? 'lost beyond the edge' : 'remembered';
       return '<div id="panel">' +
         '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
         '<div class="species">' + speciesLine + '</div>' +
@@ -1821,9 +1879,9 @@
     // when the light turns (dawn, dusk, nightfall) the whole scene is
     // repainted so the sky keeps pace — vital under warp, cheap at rest
     var phaseNow = W.dayPhase(vnow());
-    // while a hunter stalks, repaint every beat so the beast moves; otherwise
-    // repaint only when the light turns, and glide the kith between times
-    if (!openModal && (phaseNow !== lastDayPhase || W.predatorAt(state, vnow()))) {
+    // while a hunter stalks or the country turns on the folk, repaint every
+    // beat so the danger moves; otherwise repaint only when the light turns
+    if (!openModal && (phaseNow !== lastDayPhase || W.predatorAt(state, vnow()) || W.disasterAt(state.id, vnow()))) {
       lastDayPhase = phaseNow;
       render();
     } else if (!openModal) {

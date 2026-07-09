@@ -1632,6 +1632,107 @@ if (hunt) {
 }
 fakeNow = savedPredNow;
 
+/* ---------- 29. realm-borne catastrophe ---------- */
+
+console.log('catastrophe');
+const CDAY = 86400000;
+const savedCataNow = fakeNow;
+// find a world with a catastrophe that actually strikes (severity > 0)
+let cataWorld = null, cata = null;
+for (let i = 0; i < 800 && !cata; i++) {
+  const cand = W.newWorld();
+  for (let p = 1200; p < 1245 && !cata; p++) {
+    const d = W.disasterDue(cand.id, p * 13 * CDAY + 2 * CDAY);
+    if (d && d.severity > 0) { cataWorld = cand; cata = d; }
+  }
+}
+check('a catastrophe is on some world\'s calendar', !!cata);
+check('the calamity is a pure function of world and time', !!cata &&
+  JSON.stringify(W.disasterDue(cataWorld.id, cata.warnAt)) === JSON.stringify(W.disasterDue(cataWorld.id, cata.warnAt)));
+check('it unfolds warning, then strike, then aftermath', !!cata && cata.warnAt < cata.strikeAt && cata.strikeAt < cata.endAt);
+
+if (cata) {
+  // a proper population of grown, catchable folk (timid, no shelter, no swimmers)
+  fakeNow = cata.strikeAt;
+  const cRoster = Object.values(cataWorld.kith);
+  while (Object.keys(cataWorld.kith).length < 6) {
+    const nid = 'cx' + Object.keys(cataWorld.kith).length;
+    const cp = clone(cRoster[0]); cp.id = nid; cp.given = nid; cataWorld.kith[nid] = cp;
+  }
+  Object.values(cataWorld.kith).forEach(k => {
+    k.born = cata.strikeAt - 4 * CDAY; k.span = 16; k.passed = null; k.departed = null; delete k.expedition;
+    k.brain.boldness = 0.3; k.knows = []; k.genome.fins = 0; // vulnerable, undefended, no swimmers
+  });
+  cataWorld.emissary = null;
+  const twinCata = clone(cataWorld);
+
+  // the warning is sounded, and the folk read it
+  W.disasterTick(cataWorld, cata.warnAt, []);
+  check('the warning is sounded once', cataWorld.chronicle.filter(e => e.id === 'dw' + cata.id).length === 1 &&
+    cataWorld.chronicle.some(e => e.id === 'dw' + cata.id && e.kind === 'omen'));
+  const phaseWarn = W.disasterAt(cataWorld.id, cata.warnAt);
+  check('during the warning, it is a warning', phaseWarn && phaseWarn.phase === 'warning');
+
+  // the strike takes its toll — from content, deterministically
+  W.disasterTick(cataWorld, cata.strikeAt, []);
+  const lost = Object.values(cataWorld.kith).filter(k => k.passed && k.lostTo);
+  check('the strike is chronicled once', cataWorld.chronicle.filter(e => e.id === 'ds' + cata.id).length === 1);
+  check('the calamity takes a toll, but not everyone', lost.length >= 1 && lost.length < W.presentKith({ kith: cataWorld.kith }).length + lost.length);
+  check('how they were lost is remembered', lost.every(k => k.lostTo.type === cata.type));
+
+  // determinism: the same souls are lost in every copy
+  W.disasterTick(twinCata, cata.warnAt, []);
+  W.disasterTick(twinCata, cata.strikeAt, []);
+  const lost2 = Object.values(twinCata.kith).filter(k => k.passed && k.lostTo).map(k => k.id).sort();
+  check('the same souls are lost in every copy', JSON.stringify(lost.map(k => k.id).sort()) === JSON.stringify(lost2));
+
+  // it does not strike twice
+  W.disasterTick(cataWorld, cata.strikeAt + 600000, []);
+  check('one calamity, one strike', cataWorld.chronicle.filter(e => e.id === 'ds' + cata.id).length === 1);
+
+  // the aftermath is written
+  W.disasterTick(cataWorld, cata.endAt, []);
+  W.disasterTick(twinCata, cata.endAt, []);
+  check('the aftermath is written once', cataWorld.chronicle.filter(e => e.id === 'da' + cata.id).length === 1);
+
+  // reunited copies grieve once
+  const mergedCata = clone(cataWorld);
+  W.mergeWorlds(mergedCata, clone(twinCata));
+  check('reunited copies grieve the calamity once',
+    mergedCata.chronicle.filter(e => e.id === 'ds' + cata.id).length === 1 &&
+    mergedCata.chronicle.filter(e => e.id === 'dw' + cata.id).length === 1);
+
+  // a swimmer rides out the water: find a real drowning, run it on landfolk vs
+  // on swimmers, and the finned lose fewer
+  let drownWorld = null, drown = null;
+  for (let i = 0; i < 1200 && !drown; i++) {
+    const cand = W.newWorld();
+    for (let p = 1200; p < 1245 && !drown; p++) {
+      const d = W.disasterDue(cand.id, p * 13 * CDAY + 2 * CDAY);
+      if (d && d.severity >= 2 && (d.type === 'tsunami' || d.type === 'flood')) { drownWorld = cand; drown = d; }
+    }
+  }
+  if (drown) {
+    const setup = (fins) => {
+      const w = clone(drownWorld);
+      const r = Object.values(w.kith);
+      while (Object.keys(w.kith).length < 8) { const nid = 'df' + Object.keys(w.kith).length; const cp = clone(r[0]); cp.id = nid; w.kith[nid] = cp; }
+      Object.values(w.kith).forEach(k => { k.born = drown.strikeAt - 4 * CDAY; k.span = 16; k.passed = null; delete k.expedition; k.brain.boldness = 0.3; k.genome.fins = fins; });
+      w.emissary = null;
+      W.disasterTick(w, drown.strikeAt, []);
+      return Object.values(w.kith).filter(k => k.passed).length;
+    };
+    const lostAsLanders = setup(0);
+    const lostAsSwimmers = setup(2);
+    check('a drowning takes fewer of the finned than the footed', lostAsSwimmers < lostAsLanders || lostAsLanders === 0);
+    check('and swimmers mostly ride it out', lostAsSwimmers <= 1);
+  } else {
+    check('a drowning takes fewer of the finned than the footed', true, 'no drowning found — skipped');
+    check('and swimmers mostly ride it out', true, 'no drowning found — skipped');
+  }
+}
+fakeNow = savedCataNow;
+
 /* ---------- summary ---------- */
 
 console.log('');

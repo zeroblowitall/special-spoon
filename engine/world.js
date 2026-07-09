@@ -1192,6 +1192,195 @@
     };
   }
 
+  /* ---------- realm-borne catastrophe: the world as antagonist ----------
+   * Some countries can turn on the folk all at once. The sea gathers and comes
+   * ashore; the fire-mountain wakes; the dry grass catches and runs; the peak
+   * lets go its snow; the ground itself heaves. Each realm has its own, seeded
+   * from world identity and time like the weather, and each unfolds in three
+   * acts — a WARNING the folk read and flee, a STRIKE, and an AFTERMATH.
+   *
+   * WHO is lost is chosen from stable content (the young, the old, the timid,
+   * the un-defended — a swimmer rides out the water, the sheltered outlast the
+   * ash), never from a copy's live positions, so every copy suffers the same
+   * loss at the same hour and reunited worlds grieve once. The fleeing to high
+   * ground is real to watch but does not decide the toll — who you are does. */
+
+  var DIS_PERIOD = 13 * DAY;
+
+  var DISASTER_KINDS = {
+    tsunami:   { name: 'a tsunami',     method: 'drown', visual: 'wave',
+      warn: 'Far out, the sea is drawing back from the shore — further than the sea should. Something is coming.',
+      strike: 'The sea returned as a grey wall of water and broke over the low ground.',
+      after: 'The water drew back at last, and the folk who reached high ground came down to a changed shore.' },
+    flood:     { name: 'a great flood', method: 'drown', visual: 'wave',
+      warn: 'The waters are rising, and they are not stopping where waters stop.',
+      strike: 'The flood came up over the low ground and kept coming.',
+      after: 'The waters fell. Mud and a great silence lay where the low ground had been.' },
+    wildfire:  { name: 'a wildfire',    method: 'burn',  visual: 'fire',
+      warn: 'Smoke on the wind, and a red line crawling through the dry country.',
+      strike: 'The fire caught and ran through the dry country faster than legs could carry.',
+      after: 'The fire burned itself out. Black ground now — but under the ash the soil lies rich for what comes next.' },
+    eruption:  { name: 'an eruption',   method: 'burn',  visual: 'ash',
+      warn: 'The fire-mountain is smoking, and the ground is warm underfoot.',
+      strike: 'The mountain woke and threw fire and a sky full of ash across the country.',
+      after: 'The mountain settled. Ash lies over everything, pale and deep and quiet.' },
+    avalanche: { name: 'an avalanche',  method: 'bury',  visual: 'snow',
+      warn: 'A crack ran along the high snow, loud as a breaking bone.',
+      strike: 'The whole white weight of the peak let go and came down.',
+      after: 'The snow settled back into silence. Under it, the mountain kept what it took.' },
+    quake:     { name: 'an earthquake', method: 'crush', visual: 'shake',
+      warn: 'The ground shivers, and the birds have all gone quiet at once.',
+      strike: 'The ground heaved and split, and what stood tall came down.',
+      after: 'The shaking stopped. The land lay cracked and rearranged, and very still.' }
+  };
+  var REALM_DISASTERS = {
+    meadow:     ['wildfire', 'flood'], lakewild: ['tsunami', 'flood'], mistral: ['avalanche', 'quake'],
+    ember:      ['eruption'],          frostmere: ['avalanche'],       fungal:  ['quake', 'flood'],
+    saltflats:  ['wildfire', 'quake'], duskmoor:  ['wildfire', 'flood'], coralshelf: ['tsunami'],
+    glasswold:  ['quake']
+  };
+
+  function disasterDue(worldId, t) {
+    var period = Math.floor(t / DIS_PERIOD);
+    var rng = mulberry32(hash32(worldId + ':cata:' + period));
+    if (rng() >= 0.35) return null; // most seasons the country keeps its peace
+    var pool = REALM_DISASTERS[realmOf(worldId).key] || ['quake'];
+    var type = pool[Math.floor(rng() * pool.length)];
+    var warnAt = period * DIS_PERIOD + Math.floor(rng() * 10 * DAY);
+    var strikeAt = warnAt + Math.floor((2 + rng() * 4) * 3600 * 1000);   // 2–6 hours of warning
+    var endAt = strikeAt + Math.floor((1 + rng() * 3) * 3600 * 1000);
+    var severity = rng() < 0.25 ? 0 : 1 + Math.floor(rng() * 3);         // a quarter pass as near-misses
+    return {
+      id: 'cat' + hash32(worldId + ':cata:' + period).toString(16),
+      type: type, warnAt: warnAt, strikeAt: strikeAt, endAt: endAt, severity: severity, period: period
+    };
+  }
+
+  // A living read of the current catastrophe, pure, for the eye above and for
+  // the fleeing minds below. Null when the country is at peace.
+  function disasterAt(worldId, now) {
+    var due = disasterDue(worldId, now);
+    if (!due || now < due.warnAt || now >= due.endAt) return null;
+    var kind = DISASTER_KINDS[due.type] || DISASTER_KINDS.quake;
+    return {
+      id: due.id, type: due.type, name: kind.name, method: kind.method, visual: kind.visual,
+      severity: due.severity, warnAt: due.warnAt, strikeAt: due.strikeAt, endAt: due.endAt,
+      phase: now < due.strikeAt ? 'warning' : 'strike'
+    };
+  }
+
+  function disasterVuln(k, w, now, due) {
+    var stage = kithStage(k, now);
+    var v = (stage === 'young' ? 0.5 : stage === 'elder' ? 0.4 : 0) + (1 - k.brain.boldness) * 0.35;
+    var kind = DISASTER_KINDS[due.type] || DISASTER_KINDS.quake;
+    if (kind.method === 'drown') { if (isSwimmer(k)) v -= 0.75; }                 // a swimmer rides it out
+    else if (kind.method === 'burn' || kind.method === 'bury') {
+      if (knowsOf(k).indexOf('shelter') > -1) v -= 0.45;                          // the sheltered outlast it
+    }
+    v += (hash32(due.id + k.id) % 1000) / 3000;
+    return v;
+  }
+
+  function disasterKill(w, k, due) {
+    k.passed = due.strikeAt;                    // the same hour in every copy
+    k.lostTo = { type: due.type };
+    if (w.emissary === k.id) w.emissary = null;
+    k.u = bumpClock(w);
+  }
+
+  // Whether a kith in the path rides it out — an appropriate defence gives a
+  // real chance to live, so a world that knows the water (all swimmers) or the
+  // shelter loses fewer, not just different ones. Deterministic, seeded.
+  function disasterSaved(k, due) {
+    var kind = DISASTER_KINDS[due.type] || DISASTER_KINDS.quake;
+    var save = 0;
+    if (kind.method === 'drown') { if (isSwimmer(k)) save = 0.85; }
+    else if (kind.method === 'burn' || kind.method === 'bury') { if (knowsOf(k).indexOf('shelter') > -1) save = 0.7; }
+    save += k.brain.boldness * 0.12;                                  // the bold react fast
+    if (kithStage(k, due.strikeAt) === 'young') save -= 0.15;         // the young, slower
+    return mulberry32(hash32(due.id + k.id + ':save'))() < save;
+  }
+
+  // Wildfire clears the dry country: about half the growth burns to the ground
+  // and grows back from the ash. Deterministic, and merges by the plant clock.
+  function burnPlants(w, due) {
+    var rng = mulberry32(hash32(due.id + ':burn'));
+    Object.keys(w.plants).sort().forEach(function (pid) {
+      var p = w.plants[pid];
+      if (rng() < 0.5) {
+        p.growth = 0; p.planted = due.strikeAt; p.tick = due.strikeAt; p.burned = due.strikeAt;
+        p.u = bumpClock(w);
+      }
+    });
+  }
+
+  function resolveStrike(w, due, kind, events) {
+    var pool = presentKith(w);
+    var names = [];
+    if (pool.length >= 4 && due.severity > 0) {
+      var toll = Math.min(due.severity, Math.floor(pool.length * 0.34));
+      pool.sort(function (a, b) {
+        return disasterVuln(b, w, due.strikeAt, due) - disasterVuln(a, w, due.strikeAt, due) || (a.id < b.id ? -1 : 1);
+      });
+      // the toll is the most it can take; those with the right defence ride it
+      // out, so a prepared world loses fewer — not merely different souls
+      for (var i = 0; i < toll && i < pool.length; i++) {
+        if (disasterSaved(pool[i], due)) continue;
+        disasterKill(w, pool[i], due); names.push(kithLabel(pool[i]));
+      }
+    }
+    if (due.type === 'wildfire') burnPlants(w, due);
+    if (!names.length) {
+      var sparedText = kind.strike + ' But the folk had read the signs and run high, and it took no one.';
+      chronicle(w, 'catastrophe', sparedText, 'ds' + due.id);
+      events.push({ kind: 'spared', text: sparedText });
+      return;
+    }
+    var who = names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+    var line = kind.method === 'drown' ? ' It took ' + who + ' down into the water.'
+      : kind.method === 'burn' ? ' ' + who + ' could not outrun it.'
+      : kind.method === 'bury' ? ' ' + who + ' lie under the white now.'
+      : ' It came down upon ' + who + '.';
+    chronicle(w, 'catastrophe', kind.strike + line, 'ds' + due.id);
+    events.push({ kind: 'catastrophe', text: names.length + (names.length === 1 ? ' of the folk was' : ' of the folk were') + ' lost to ' + kind.name + '.' });
+  }
+
+  function disasterTick(w, now, events) {
+    var due = disasterDue(w.id, now);
+    if (!due) return;
+    var kind = DISASTER_KINDS[due.type] || DISASTER_KINDS.quake;
+    if (now >= due.warnAt && !w.chronicle.some(function (e) { return e.id === 'dw' + due.id; })) {
+      chronicle(w, 'omen', kind.warn, 'dw' + due.id);
+      events.push({ kind: 'omen', text: kind.warn });
+    }
+    if (now >= due.strikeAt && !w.chronicle.some(function (e) { return e.id === 'ds' + due.id; })) {
+      resolveStrike(w, due, kind, events);
+    }
+    if (now >= due.endAt && !w.chronicle.some(function (e) { return e.id === 'da' + due.id; })) {
+      chronicle(w, 'aftermath', kind.after, 'da' + due.id);
+      events.push({ kind: 'aftermath', text: kind.after });
+    }
+  }
+
+  // Where a frightened kith runs: the highest reachable ground nearby. Purely
+  // presentation (survival is decided by content), and free of randomness so
+  // the world's deterministic stream is untouched.
+  function fleeTarget(terrain, k) {
+    var best = null, bestH = -Infinity;
+    for (var i = 0; i < 12; i++) {
+      var ang = i / 12 * Math.PI * 2;
+      for (var step = 1; step <= 3; step++) {
+        var rad = 0.08 * step;
+        var x = Math.max(0.03, Math.min(0.97, k.x + Math.cos(ang) * rad));
+        var y = Math.max(0.56, Math.min(0.97, k.y + Math.sin(ang) * rad));
+        if (!canStandAt(terrain, k, x, y) || !reachableStraight(terrain, k, k.x, k.y, x, y)) continue;
+        var h = terrainCell(terrain, x, y);
+        if (h > bestH) { bestH = h; best = { x: x, y: y }; }
+      }
+    }
+    return best;
+  }
+
   /* ---------- the almanac ----------
    * A book of pages that write themselves. Each page is a riddle until the
    * world makes it true; then it fills with the date and the names, and
@@ -2116,6 +2305,7 @@
     wandererTick(w, now, events);
     expeditionTick(w, now, events);
     predatorTick(w, now, events);
+    disasterTick(w, now, events);
     var terrain = makeTerrain(w.id);
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
     var wxNow = weatherAt(w.id, now);
@@ -2123,6 +2313,8 @@
     var winter = wxNow.season === 'winter';
     var night = isNight(now);
     var mindEnv = { night: night, storm: storm };
+    var disaster = disasterAt(w.id, now);
+    var fleeing = !!disaster; // warning or strike — either way, run for high ground
     var call = (beacon && now < beacon.until) ? beacon : null;
     var alive = presentKith(w); // the travelling are off the map until they return
     var blooming = Object.keys(w.plants).map(function (id) { return w.plants[id]; })
@@ -2160,6 +2352,21 @@
       if (rising) {
         k.goal = 'make';
         k.intent = rising.type === 'hearth' ? 'tending the new hearth' : 'raising the lean-to';
+      }
+      // the country turns on the folk: drop everything and run for high ground.
+      // This is real to watch, but WHO lives is decided by content at the
+      // strike, not by where the running left them.
+      if (fleeing) {
+        if (k.act === 'eat' || k.act === 'rest' || k.act === 'shelter' || k.act === 'sleep') {
+          k.act = 'wander'; k.eating = null;
+        }
+        k.goal = 'safety'; k.drive = 'safety';
+        k.intent = disaster.method === 'drown' ? 'fleeing for high ground'
+          : disaster.method === 'burn' ? 'running from the fire'
+          : disaster.method === 'bury' ? 'running from the mountain'
+          : 'running for safety';
+        var safe = fleeTarget(terrain, k);
+        if (safe) { k.tx = safe.x; k.ty = safe.y; }
       }
 
       if (k.act === 'eat') {
@@ -2276,7 +2483,9 @@
       var wanderUrge = urge.curiosity;
       var restUrge = brain.patience * 0.3 * rng();
 
-      if (stormUrge > hungerUrge && stormUrge > 0.5) {
+      if (fleeing) {
+        // already running for high ground (target set above) — nothing else matters
+      } else if (stormUrge > hungerUrge && stormUrge > 0.5) {
         // a lean-to first, if one stands near; else high ground; else hunker
         var refuge = null;
         var bestLeanto = null, bestLeantoD = 0.35;
@@ -3166,6 +3375,9 @@
     predatorDue: predatorDue,
     predatorAt: predatorAt,
     predatorTick: predatorTick,
+    disasterDue: disasterDue,
+    disasterAt: disasterAt,
+    disasterTick: disasterTick,
     presentKith: presentKith,
     almanacTick: almanacTick,
     almanacPages: almanacPages,
