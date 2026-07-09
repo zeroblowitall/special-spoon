@@ -1491,6 +1491,71 @@ check('reunited copies hold one finished-telling, not two',
   mergedRise.chronicle.filter(e => e.id === 'sc' + raising.id).length === 1);
 fakeNow = savedRiseNow;
 
+/* ---------- 27. expeditions beyond the edge ---------- */
+
+console.log('expeditions');
+const EDAY = 86400000;
+const savedExpNow = fakeNow;
+// find a world with an expedition on its calendar
+let expWorld = null, due = null;
+for (let i = 0; i < 400 && !due; i++) {
+  const cand = W.newWorld();
+  for (let p = 1200; p < 1245 && !due; p++) {
+    const d = W.expeditionDue(cand.id, p * 9 * EDAY + 3 * EDAY);
+    if (d) { expWorld = cand; due = d; }
+  }
+}
+check('an expedition is on some world\'s calendar', !!due);
+check('the schedule is a pure function of world and time', !!due &&
+  JSON.stringify(W.expeditionDue(expWorld.id, due.start)) === JSON.stringify(W.expeditionDue(expWorld.id, due.start)));
+check('a journey lasts a span of days', !!due && due.back > due.start && (due.back - due.start) >= 3 * EDAY);
+
+if (due) {
+  // make the folk grown and restless, and clear the emissary so no one is exempt
+  fakeNow = due.start;
+  Object.values(expWorld.kith).forEach(k => {
+    k.born = due.start - 3 * EDAY; k.span = 16;
+    k.brain.curiosity = 0.9; k.brain.boldness = 0.9; k.brain.wanderlust = 0.9;
+  });
+  expWorld.emissary = null;
+  const twinExp = clone(expWorld);
+
+  W.expeditionTick(expWorld, due.start, []);
+  const away = W.livingKith(expWorld).filter(k => k.expedition);
+  check('one of the folk sets out beyond the edge', away.length === 1);
+  check('the departure is chronicled once', expWorld.chronicle.filter(e => e.id === 'xd' + due.id).length === 1);
+  check('the traveller is off the map, yet still of the folk', away.length === 1 &&
+    W.presentKith(expWorld).every(k => k.id !== away[0].id) &&
+    W.livingKith(expWorld).some(k => k.id === away[0].id));
+
+  // determinism: the same soul answers the horizon in every copy
+  W.expeditionTick(twinExp, due.start, []);
+  const away2 = W.livingKith(twinExp).filter(k => k.expedition);
+  check('the same soul goes in every copy', away.length === 1 && away2.length === 1 && away2[0].id === away[0].id);
+
+  // ...and does not set out twice for the same journey
+  W.expeditionTick(expWorld, due.start + EDAY, []);
+  check('it does not set out twice', expWorld.chronicle.filter(e => e.id === 'xd' + due.id).length === 1);
+
+  // the return, at its appointed hour
+  const travId = away[0].id;
+  fakeNow = due.back;
+  W.expeditionTick(expWorld, due.back, []);
+  W.expeditionTick(twinExp, due.back, []);
+  const trav = expWorld.kith[travId];
+  check('the traveller comes home, or is mourned, at its hour', !trav.expedition || !!trav.passed);
+  check('the return is told once', expWorld.chronicle.filter(e => e.id === 'xr' + due.id).length === 1);
+  check('changed the same way in every copy', content(expWorld.kith[travId]) === content(twinExp.kith[travId]));
+
+  // reunited copies hold one journey, not two
+  const mergedExp = clone(expWorld);
+  W.mergeWorlds(mergedExp, clone(twinExp));
+  check('reunited copies hold one journey, not two',
+    mergedExp.chronicle.filter(e => e.id === 'xd' + due.id).length === 1 &&
+    mergedExp.chronicle.filter(e => e.id === 'xr' + due.id).length === 1);
+}
+fakeNow = savedExpNow;
+
 /* ---------- summary ---------- */
 
 console.log('');

@@ -730,7 +730,7 @@
 
   function drawAllKith() {
     var now = vnow();
-    return W.livingKith(state)
+    return W.presentKith(state) // the away are off the map until they return
       .sort(function (a, b) { return a.y - b.y; })
       .map(function (k) { return drawKith(k, now); })
       .join('');
@@ -903,7 +903,7 @@
   function updateKithLayer() {
     var layer = document.getElementById('kith-layer');
     if (!layer) return;
-    var living = W.livingKith(state);
+    var living = W.presentKith(state); // away kith aren't on the map to glide
     var missing = false;
     var now = vnow();
     living.forEach(function (k) {
@@ -1001,11 +1001,25 @@
     var ageText = days < 1 ? 'born today' : days + (days === 1 ? ' day' : ' days') + ' old';
 
     if (k.passed) {
+      var restText = k.lostBeyond
+        ? 'walked out past the edge of the world, and did not come home'
+        : 'fell asleep beneath the soil';
       return '<div id="panel">' +
         '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
-        '<div class="species">remembered</div>' +
-        '<div class="meta">lived ' + Math.max(1, Math.round((k.passed - k.born) / 86400000)) + ' days · fell asleep beneath the soil</div>' +
+        '<div class="species">' + (k.lostBeyond ? 'lost beyond the edge' : 'remembered') + '</div>' +
+        '<div class="meta">lived ' + Math.max(1, Math.round((k.passed - k.born) / 86400000)) + ' days · ' + restText + '</div>' +
         (k.bornOfMerge ? '<div class="hybrid-note">✦ Was born of the meeting of ' + escapeHtml(k.bornOfMerge.worlds[0]) + ' and ' + escapeHtml(k.bornOfMerge.worlds[1]) + '.</div>' : '') +
+        '<div class="row"><button class="btn" data-act="close-panel">Close</button></div></div>';
+    }
+    if (k.expedition) {
+      var out = Math.max(0, Math.floor((now - k.expedition.start) / 86400000));
+      var backIn = Math.max(0, Math.ceil((k.expedition.back - now) / 86400000));
+      return '<div id="panel">' +
+        '<h2>' + escapeHtml(k.name || k.given) + '</h2>' +
+        '<div class="species">away beyond the edge of the world</div>' +
+        '<div class="meta">' + (out < 1 ? 'set out today' : out + (out === 1 ? ' day' : ' days') + ' gone') +
+        ' · ' + (backIn < 1 ? 'due back any hour now' : 'perhaps ' + backIn + (backIn === 1 ? ' day' : ' days') + ' more') + '</div>' +
+        '<div class="hybrid-note">✦ It went looking for what lies past the map. It will return changed — or it will be mourned.</div>' +
         '<div class="row"><button class="btn" data-act="close-panel">Close</button></div></div>';
     }
     if (k.departed) {
@@ -1053,6 +1067,8 @@
     if (W.knowsOf(k).indexOf('song') > -1) skills.push('a singer: it sings against the storms');
     if (W.knowsOf(k).indexOf('shelter') > -1) skills.push('a builder: it raises shelters');
     if (W.knowsOf(k).indexOf('hearth') > -1) skills.push('a hearth-keeper: warmth follows it');
+    (k.relics || []).forEach(function (r) { skills.push('carries ' + escapeHtml(r.name) + ', from beyond the edge'); });
+    if (k.scars) skills.push(k.scars === 1 ? 'bears a scar from the far country' : 'bears the scars of hard travels');
     var skillLine = skills.length ? skills.join(' · ') : null;
     var tastes = Object.keys(k.taste || {});
     var tasteLine = null;
@@ -1161,17 +1177,24 @@
       var censusNow = vnow();
       var census = W.livingKith(state).sort(function (a, b) { return a.born - b.born; }).map(function (k) {
         var kindName = W.kindOf(k.genome).name;
-        var mood = k.starving ? 'starving' : k.act === 'eat' ? 'eating' : k.act === 'shelter' ? 'sheltering' :
+        var away = !!k.expedition;
+        var mood = away ? 'away beyond the edge' :
+          k.starving ? 'starving' : k.act === 'eat' ? 'eating' : k.act === 'shelter' ? 'sheltering' :
           k.act === 'rest' ? 'dozing' : k.energy < 0.45 ? 'hungry' : 'about';
         var traits = [];
         if (state.emissary === k.id) traits.push('emissary');
         if (W.isSwimmer(k)) traits.push('swimmer');
         W.knowsOf(k).forEach(function (s) { traits.push({ seedkeeping: 'seed-keeper', song: 'singer', shelter: 'builder', hearth: 'hearth-keeper' }[s] || s); });
-        var doing = k.intent ? '<br><span class="muted">' + escapeHtml(k.intent) + '</span>' : '';
+        if (k.relics && k.relics.length) traits.push('far-traveller');
+        if (k.scars) traits.push('scarred');
+        var doing = away ? '<br><span class="muted">it went looking for what lies past the map</span>'
+          : (k.intent ? '<br><span class="muted">' + escapeHtml(k.intent) + '</span>' : '');
+        var visit = away ? '<span class="muted">—</span>'
+          : '<button class="btn small" data-kith-focus="' + k.id + '">Visit</button>';
         return '<div class="chronicle-entry"><span class="what"><strong>' + escapeHtml(W.kithLabel(k)) + '</strong> · ' +
           escapeHtml(kindName) + ' · ' + W.kithStage(k, censusNow) + ' · ' + mood + doing +
           (traits.length ? '<br><span class="muted">' + escapeHtml(traits.join(', ')) + '</span>' : '') + '</span>' +
-          '<span class="when"><button class="btn small" data-kith-focus="' + k.id + '">Visit</button></span></div>';
+          '<span class="when">' + visit + '</span></div>';
       }).join('');
       inner = '<h2>The Folk</h2>' +
         '<p class="muted">Everyone alive in this world, eldest first. Visit one and the eye of the gardener goes to it.</p>' +

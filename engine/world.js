@@ -857,6 +857,187 @@
     });
   }
 
+  /* ---------- expeditions beyond the edge ----------
+   * The mirror of the Wanderer: now and then one of a world's OWN kith — a
+   * restless, bold, curious soul — walks off the edge of the map and is gone
+   * for days. It comes back changed: a relic from nowhere, a craft learned far
+   * away, a scar and a hard story — or it never returns, and is mourned.
+   *
+   * WHEN a party sets out and how long it is gone derive from world identity
+   * and time (like the weather); WHO goes is chosen from stable content
+   * (traits, age, standing), never from a copy's fleeting mood; and WHAT is
+   * found derives from the expedition's own seed. So identical copies send the
+   * same soul on the same day and it returns with the same tale. The merge is
+   * "merge-lite" (whole-kith, last clock wins): the more-travelled version of a
+   * kith always outranks the one still waiting, and the chronicle dedupes the
+   * telling — so reunited worlds hold one journey, not two. */
+
+  var EXPED_PERIOD = 9 * DAY;
+
+  var EXPED_PLACES = [
+    'a forest drowned to its crowns', 'a plain of black glass',
+    'a canyon that sang in the wind', 'an island ringed with old bones',
+    'a warm and shoreless sea', 'a range of a hundred grey peaks',
+    'a garden gone wild and vast', 'a valley breathing steam',
+    'a wood whose trees had walked', 'a still city with no one left in it'
+  ];
+  var EXPED_DEEDS = [
+    'it traded words with things it could not name',
+    'it slept in the halls of an older people',
+    'it followed a cold river to its spring',
+    'it out-waited a long and starless winter',
+    'it was carried a while by a great slow beast',
+    'it learned the song the wind was singing there',
+    'it went hungry, and would not turn back',
+    'it made an unlikely friend, and lost it again'
+  ];
+  var EXPED_RELIC_ADJ = ['a pale', 'a foreign', 'a light-holding', 'a sea-worn', 'a carved', 'a humming', 'a cold', 'a golden'];
+  var EXPED_RELIC_NOUN = ['shell', 'stone', 'ring', 'feather', 'coin', 'seed-pod', 'bead', 'key to no lock here'];
+
+  function expeditionDue(worldId, t) {
+    var period = Math.floor(t / EXPED_PERIOD);
+    var rng = mulberry32(hash32(worldId + ':exped:' + period));
+    if (rng() >= 0.5) return null; // no one hears the horizon this while
+    var start = period * EXPED_PERIOD + Math.floor(rng() * 7 * DAY);
+    var away = (3 + Math.floor(rng() * 6)) * DAY; // three to eight days gone
+    return {
+      id: 'xpd' + hash32(worldId + ':exped:' + period).toString(16),
+      start: start,
+      back: start + away,
+      period: period
+    };
+  }
+
+  // The restless who might answer the horizon — chosen from CONTENT alone
+  // (traits, stage, standing, span), so every copy would pick the same soul.
+  function expeditionCandidates(w, now, back) {
+    return livingKith(w).filter(function (k) {
+      if (k.wanderer || k.expedition || k.passed || k.departed) return false;
+      if (w.emissary === k.id) return false; // the emissary stays for the meeting-stone
+      if (kithStage(k, now) !== 'grown') return false; // the young and the old stay home
+      if ((k.born + (k.span || 16) * DAY) <= back) return false; // must outlast the journey
+      return (k.brain.curiosity + k.brain.boldness + k.brain.wanderlust) >= 1.7;
+    });
+  }
+
+  function departExpedition(w, due, events) {
+    if (w.chronicle.some(function (e) { return e.id === 'xd' + due.id; })) return; // already set out
+    var cands = expeditionCandidates(w, env.now(), due.back);
+    if (!cands.length) return; // the horizon called, but no one restless enough was free
+    // the most restless goes; a per-journey jitter breaks ties, deterministically
+    cands.sort(function (a, b) {
+      var ra = a.brain.curiosity + a.brain.boldness + a.brain.wanderlust + (hash32(due.id + a.id) % 1000) / 4000;
+      var rb = b.brain.curiosity + b.brain.boldness + b.brain.wanderlust + (hash32(due.id + b.id) % 1000) / 4000;
+      return rb - ra || (a.id < b.id ? -1 : 1);
+    });
+    var goer = cands[0];
+    goer.expedition = { id: due.id, start: due.start, back: due.back };
+    goer.starving = null; goer.tx = null; goer.ty = null; goer.act = 'wander';
+    goer.u = bumpClock(w);
+    var text = kithLabel(goer) + ', restless past bearing, walked out beyond the edge of the world. It may be gone some days.';
+    chronicle(w, 'expedition', text, 'xd' + due.id);
+    events.push({ kind: 'expedition', text: text });
+  }
+
+  function returnExpedition(w, k, now) {
+    var exp = k.expedition;
+    var rng = mulberry32(hash32(exp.id + ':outcome'));
+    var place = EXPED_PLACES[Math.floor(rng() * EXPED_PLACES.length)];
+    var deed = EXPED_DEEDS[Math.floor(rng() * EXPED_DEEDS.length)];
+    var roll = rng();
+
+    if (roll < 0.16) {
+      // lost — it never comes home. A gentle hand: mourned, not gruesome.
+      k.passed = exp.back;      // the same moment in every copy
+      k.lostBeyond = true;      // how they were lost, kept for the record
+      if (w.emissary === k.id) w.emissary = null;
+      k.u = bumpClock(w);
+      var lostText = 'Beyond the edge, ' + kithLabel(k) + ' found ' + place + ', where ' + deed +
+        '. It did not come home. The world keeps a place for it.';
+      chronicle(w, 'passing', lostText, 'xr' + exp.id);
+      return { kind: 'passing', text: kithLabel(k) + ' did not return from beyond the edge.' };
+    }
+
+    // survivors reappear at the edge they left from
+    var spot = findSpot(w, 'expreturn:' + exp.id, function (t2, x, y) {
+      return isLandAt(t2, x, y) && (x < 0.14 || x > 0.86);
+    });
+    k.x = spot.x; k.y = spot.y; k.tx = null; k.ty = null; k.facing = 1;
+    k.act = 'wander'; k.energy = 0.8; k.starving = null;
+    k.expedition = null;
+
+    var tail;
+    if (roll < 0.5) {
+      var relicName = EXPED_RELIC_ADJ[Math.floor(rng() * EXPED_RELIC_ADJ.length)] + ' ' +
+        EXPED_RELIC_NOUN[Math.floor(rng() * EXPED_RELIC_NOUN.length)];
+      k.relics = (k.relics || []).concat([{ id: 'rl' + exp.id, name: relicName }]);
+      tail = 'and came home carrying ' + relicName + '.';
+    } else if (roll < 0.72) {
+      var crafts = ['seedkeeping', 'song', 'shelter', 'hearth'].filter(function (c) { return knowsOf(k).indexOf(c) === -1; });
+      if (crafts.length) {
+        var craft = crafts[Math.floor(rng() * crafts.length)];
+        learn(w, k, craft); // bumps the clock
+        tail = 'and came home having learned ' + skillName(craft) + '.';
+      } else {
+        k.relics = (k.relics || []).concat([{ id: 'rl' + exp.id, name: 'a strange keepsake' }]);
+        tail = 'and came home with a strange keepsake.';
+      }
+    } else if (roll < 0.88) {
+      k.scars = (k.scars || 0) + 1;
+      tail = 'and came home changed — a long pale scar, and fewer words than before.';
+    } else {
+      tail = plantExpeditionSeed(w, k, exp, rng);
+    }
+    k.u = bumpClock(w);
+    var text = 'Beyond the edge, ' + kithLabel(k) + ' found ' + place + ', where ' + deed + ', ' + tail;
+    chronicle(w, 'expedition', text, 'xr' + exp.id);
+    return { kind: 'expedition', text: kithLabel(k) + ' has come home from beyond the edge.' };
+  }
+
+  // A seed from nowhere, planted where the traveller returned. Deterministic
+  // id, so drifted copies grow the one same foreign bloom.
+  function plantExpeditionSeed(w, k, exp, rng) {
+    var plantId = 'xp' + exp.id;
+    if (w.plants[plantId] || Object.keys(w.plants).length >= MAX_WILD_PLANTS) {
+      return 'and came home with a fistful of seeds from a plant that grows nowhere here.';
+    }
+    var terrain = makeTerrain(w.id);
+    var spot = isSoilAt(terrain, k.x, k.y) ? { x: k.x, y: k.y } : findSpot(w, 'expseed:' + exp.id, isSoilAt);
+    w.plants[plantId] = {
+      id: plantId,
+      species: makeKithName(rng, k.genome.voice) + 'bloom',
+      name: null,
+      genome: {
+        form: PLANT_FORMS[Math.floor(rng() * PLANT_FORMS.length)],
+        hue: Math.floor(rng() * 360),
+        size: 0.5 + rng() * 0.4,
+        aspect: 0.7 + rng() * 0.8,
+        detail: 2 + Math.floor(rng() * 5),
+        glow: rng() < 0.5,
+        rate: 0.8 + rng() * 0.6
+      },
+      x: spot.x, y: spot.y,
+      soil: BIOMES[biomeAt(terrain, spot.x, spot.y)].fertility,
+      planted: exp.back, tick: exp.back,
+      growth: 0, watered: 0, origin: 'beyond the edge', byHand: false, bornOfMerge: null,
+      u: bumpClock(w)
+    };
+    return 'and came home to plant a seed of a bloom that grows nowhere here.';
+  }
+
+  function expeditionTick(w, now, events) {
+    var due = expeditionDue(w.id, now);
+    if (due && now >= due.start && now < due.back) {
+      departExpedition(w, due, events);
+    }
+    Object.keys(w.kith).forEach(function (id) {
+      var k = w.kith[id];
+      if (k.expedition && !k.passed && now >= k.expedition.back) {
+        events.push(returnExpedition(w, k, now));
+      }
+    });
+  }
+
   /* ---------- the almanac ----------
    * A book of pages that write themselves. Each page is a riddle until the
    * world makes it true; then it fills with the date and the names, and
@@ -1671,6 +1852,13 @@
     return Object.keys(w.kith || {}).map(function (id) { return w.kith[id]; }).filter(isAlive);
   }
 
+  // Those present ON THE MAP: the living, minus any away beyond the edge. The
+  // travelling are still alive and still counted among the folk — they are
+  // simply not here to be fed, met, or drawn until they return.
+  function presentKith(w) {
+    return livingKith(w).filter(function (k) { return !k.expedition; });
+  }
+
   function kithLabel(k) {
     return k.name ? k.name : k.given;
   }
@@ -1772,6 +1960,7 @@
     var now = env.now();
     var events = checkMortality(w, now);
     wandererTick(w, now, events);
+    expeditionTick(w, now, events);
     var terrain = makeTerrain(w.id);
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
     var wxNow = weatherAt(w.id, now);
@@ -1780,7 +1969,7 @@
     var night = isNight(now);
     var mindEnv = { night: night, storm: storm };
     var call = (beacon && now < beacon.until) ? beacon : null;
-    var alive = livingKith(w);
+    var alive = presentKith(w); // the travelling are off the map until they return
     var blooming = Object.keys(w.plants).map(function (id) { return w.plants[id]; })
       .filter(function (p) { return p.growth > 0.55; });
     var dayBucket = Math.floor(now / DAY);
@@ -2798,6 +2987,9 @@
     BUILD_MS: BUILD_MS,
     wandererDue: wandererDue,
     wandererTick: wandererTick,
+    expeditionDue: expeditionDue,
+    expeditionTick: expeditionTick,
+    presentKith: presentKith,
     almanacTick: almanacTick,
     almanacPages: almanacPages,
     modernKithGenome: modernKithGenome,
