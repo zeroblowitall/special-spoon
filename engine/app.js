@@ -1109,6 +1109,8 @@
     var haloSel = sel ? '<circle cx="0" cy="-6" r="16" fill="none" stroke="#ffd166" stroke-width="2" opacity="0.9"/>' : '';
     var haloEmissary = emissary ? '<circle cx="0" cy="-6" r="13" fill="none" stroke="#ffd166" stroke-width="1" stroke-dasharray="2 3" opacity="0.85" class="emissary-ring"/>' : '';
     var haloWanderer = k.wanderer ? '<circle cx="0" cy="-6" r="14" fill="none" stroke="#cfd8dd" stroke-width="1" stroke-dasharray="1 4" opacity="0.8" class="wanderer-ring"/>' : '';
+    var haloTurned = k.turned ? '<circle cx="0" cy="-6" r="15" fill="none" stroke="#c0392b" stroke-width="2" opacity="0.85" class="turned-ring"/>' : '';
+    var haloLeader = W.leaderOfKith(state, k, now) ? '<circle cx="0" cy="-6" r="13" fill="none" stroke="#ffd166" stroke-width="1.4" stroke-dasharray="6 4" opacity="0.85"/>' : '';
     // a sleeping "z" — always present, shown only by the act-sleep class so
     // the cheap incremental update can reveal it without a full re-render
     var zSvg = '<text class="kith-z" x="' + (rx * scale + 2).toFixed(0) + '" y="' + (-(-top + 4) * scale).toFixed(0) + '">z</text>';
@@ -1122,7 +1124,7 @@
       'style="transition: transform ' + (KITH_TICK_MS / 1000 + 0.2) + 's linear" ' +
       'transform="translate(' + pos.x.toFixed(1) + ' ' + pos.y.toFixed(1) + ')">' +
       ripple +
-      haloWanderer + haloEmissary + haloSel +
+      haloWanderer + haloTurned + haloLeader + haloEmissary + haloSel +
       '<g class="kith-bob" style="animation-delay:-' + (W.hash32(k.id) % 3000) + 'ms">' +
       '<g class="pose">' +
       '<g transform="translate(0 ' + (inWater ? 3.5 : 0) + ') scale(' + (scale * k.facing).toFixed(2) + ' ' + scale.toFixed(2) + ')">' +
@@ -1289,7 +1291,10 @@
         escapeHtml(W.kithLabel(state.kith[grudges[0]])) + (grudges.length > 1 ? ' and others' : '');
     }
     var tribe = W.tribeOfKith(state, k.id);
-    var tribeLine = tribe ? 'of the ' + escapeHtml(tribe.name) + ' (' + tribe.members.length + ' strong)' : null;
+    var leads = W.leaderOfKith(state, k, now);
+    var tribeLine = leads ? 'leads the ' + escapeHtml(leads.name) + ' (' + leads.members.length + ' strong) — its voice'
+      : tribe ? 'of the ' + escapeHtml(tribe.name) + ' (' + tribe.members.length + ' strong)' : null;
+    if (k.turned) tribeLine = '⚠ turned against the folk — it takes what it will, until the village stands against it';
     var kin = [];
     (k.parents || []).forEach(function (pid) {
       if (state.kith[pid]) kin.push('child of ' + escapeHtml(W.kithLabel(state.kith[pid])) + (state.kith[pid].passed ? ' (remembered)' : ''));
@@ -1433,6 +1438,8 @@
         W.knowsOf(k).forEach(function (s) { traits.push({ seedkeeping: 'seed-keeper', song: 'singer', shelter: 'builder', hearth: 'hearth-keeper', ward: 'watcher', tending: 'healer' }[s] || s); });
         if (k.relics && k.relics.length) traits.push('far-traveller');
         if (k.scars) traits.push('scarred');
+        if (W.leaderOfKith(state, k, censusNow)) traits.push('leader');
+        if (k.turned) traits.push('turned');
         var doing = away ? '<br><span class="muted">it went looking for what lies past the map</span>'
           : (k.intent ? '<br><span class="muted">' + escapeHtml(k.intent) + '</span>' : '');
         var visit = away ? '<span class="muted">—</span>'

@@ -1966,6 +1966,84 @@ check('a naming-day welcomes a newborn born into a village',
   rb.w.chronicle.some(e => e.id === 'nmd' + babyId && e.kind === 'ritual'));
 fakeNow = savedRitNow;
 
+/* ---------- 31. factions & drama: leaders, and the one who turns ---------- */
+
+console.log('factions');
+const savedFacNow = fakeNow;
+// a tribe of four fast friends → one becomes its leader
+const facWorld = W.newWorld();
+const clan = Object.values(facWorld.kith);
+while (Object.keys(facWorld.kith).length < 4) {
+  const nid = 'clan' + Object.keys(facWorld.kith).length;
+  const cp = clone(clan[0]); cp.id = nid; cp.given = nid; facWorld.kith[nid] = cp;
+}
+const clanFolk = Object.values(facWorld.kith);
+clanFolk.forEach(k => {
+  k.born = fakeNow - 5 * RITDAY; k.span = 40; k.passed = null; delete k.expedition; k.turned = false; k.led = false; k.knows = [];
+  k.trust = {}; clanFolk.forEach(o => { if (o.id !== k.id) k.trust[o.id] = 0.8; }); // all bonded → one tribe
+});
+const leader = W.tribeLeader(W.tribeOfKith(facWorld, clanFolk[0].id), fakeNow);
+check('a tribe has a leader', !!leader && clanFolk.some(k => k.id === leader.id));
+W.factionTick(facWorld, fakeNow, []);
+check('a leader is recognised, told once', facWorld.chronicle.filter(e => e.id === 'led' + leader.id).length === 1 &&
+  facWorld.chronicle.some(e => e.id === 'led' + leader.id && e.kind === 'faction'));
+check('the leader is marked as such', facWorld.kith[leader.id].led === true);
+
+// the turncoat: an outcast, bold, cold, grown soul turns against a village
+// find a period where a chosen outcast turns
+let turnWorld = null, villainId = null, turnAt = null;
+for (let i = 0; i < 200 && !villainId; i++) {
+  const cand = W.newWorld();
+  const vid = Object.keys(cand.kith)[0];
+  for (let p = 1200; p < 1260 && !villainId; p++) {
+    const at = null; // probe turnMoment indirectly via factionTick below
+  }
+  // set up an outcast villain + a village, then look for a turn moment
+  const folk = Object.values(cand.kith);
+  const villain = folk[0];
+  villain.brain.boldness = 0.9; villain.brain.sociability = 0.1;
+  villain.born = fakeNow - 5 * RITDAY; villain.span = 40; villain.trust = {};
+  folk.forEach(o => { if (o.id !== villain.id) { delete o.trust[villain.id]; delete villain.trust[o.id]; } }); // outcast
+  // a village (hearth + 'v' chronicle) for it to prey on
+  cand.structures = cand.structures || {};
+  cand.structures['vh'] = { id: 'vh', type: 'hearth', x: 0.5, y: 0.78, by: folk[1].id, built: fakeNow, start: fakeNow - 9e6, u: 1 };
+  cand.chronicle.push({ id: 'vvh', kind: 'kind', at: fakeNow, t: cand.clock, world: cand.id, text: 'Around the hearth, shelters stand, and the Fefeno live among them. This world has its first village.' });
+  // some garden plants near the village to raid
+  cand.plants['gp1'] = { id: 'gp1', species: 'x', genome: { form: 'puff', hue: 100, size: 0.5, aspect: 1, detail: 3, glow: false, rate: 1 }, x: 0.52, y: 0.79, soil: 1, growth: 1, planted: fakeNow, tick: fakeNow, u: 1 };
+  // scan a couple of periods for a turn
+  for (let d = 0; d < 26 && !villainId; d++) {
+    const t = fakeNow + d * RITDAY;
+    W.factionTick(cand, t, []);
+    if (cand.kith[villain.id].turned) { turnWorld = cand; villainId = villain.id; turnAt = cand.kith[villain.id].turnedAt; }
+  }
+}
+check('a lone, hard, friendless soul turns against the folk', !!villainId);
+if (villainId) {
+  check('the turning is chronicled', turnWorld.chronicle.some(e => e.id === 'trn' + villainId && e.kind === 'faction'));
+  const twin = clone(turnWorld);
+  // run both forward through the raids and the reckoning
+  for (let d = 0; d < 30; d++) { const t = fakeNow + (26 + d) * RITDAY; W.factionTick(turnWorld, t, []); W.factionTick(twin, t, []); }
+  check('the villain raids the village\'s gardens', turnWorld.chronicle.some(e => /^rd/.test(e.id || '')));
+  check('a champion stands against it, and it is driven out', turnWorld.chronicle.some(e => e.id === 'rck' + villainId));
+  check('the villain is gone from the living', W.livingKith(turnWorld).every(k => k.id !== villainId));
+  check('the reckoning falls the same way in every copy',
+    JSON.stringify((turnWorld.chronicle.find(e => e.id === 'rck' + villainId) || {}).text) ===
+    JSON.stringify((twin.chronicle.find(e => e.id === 'rck' + villainId) || {}).text));
+  // merge holds one telling of the whole drama
+  const facMerged = clone(turnWorld);
+  W.mergeWorlds(facMerged, clone(twin));
+  check('reunited copies hold one reckoning, not two',
+    facMerged.chronicle.filter(e => e.id === 'rck' + villainId).length === 1);
+}
+
+// no village, no villain: the drama needs a village to prey on
+const noVillage = W.newWorld();
+const nvFolk = Object.values(noVillage.kith);
+nvFolk[0].brain.boldness = 0.9; nvFolk[0].brain.sociability = 0.1; nvFolk[0].born = fakeNow - 5 * RITDAY; nvFolk[0].trust = {};
+for (let d = 0; d < 26; d++) W.factionTick(noVillage, fakeNow + d * RITDAY, []);
+check('with no village, no one turns', Object.values(noVillage.kith).every(k => !k.turned));
+fakeNow = savedFacNow;
+
 /* ---------- summary ---------- */
 
 console.log('');

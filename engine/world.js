@@ -969,7 +969,7 @@
   // (traits, stage, standing, span), so every copy would pick the same soul.
   function expeditionCandidates(w, now, back) {
     return livingKith(w).filter(function (k) {
-      if (k.wanderer || k.expedition || k.passed || k.departed || k.sick) return false;
+      if (k.wanderer || k.expedition || k.passed || k.departed || k.sick || k.turned) return false;
       if (w.emissary === k.id) return false; // the emissary stays for the meeting-stone
       if (kithStage(k, now) !== 'grown') return false; // the young and the old stay home
       if ((k.born + (k.span || 16) * DAY) <= back) return false; // must outlast the journey
@@ -1675,6 +1675,141 @@
       events.push({ kind: 'ritual', text: text });
       setGathering(w, hearth, now, singer ? 'song' : 'gathering');
     });
+  }
+
+  /* ---------- factions & drama: leaders, and the one who turns ----------
+   * A tribe of bonded folk comes to have a voice — a LEADER, the most-tied and
+   * most-seasoned among them. And sometimes a lone, hard, friendless soul turns
+   * against the folk: it raids the village's gardens in the night, until the
+   * village's champion stands against it and drives it out — sometimes at a
+   * cost. Leaders derive from the bond graph; who turns and when, and how the
+   * reckoning falls, derive from stable content and seeds — so every copy sees
+   * the same rise and the same drama, and reunited worlds hold each once. */
+
+  var TURN_PERIOD = 12 * DAY;
+
+  function tribeStanding(k, tribe, now) {
+    var bondsIn = tribe.members.filter(function (m) { return m.id !== k.id && (k.trust[m.id] || 0) >= 0.5; }).length;
+    var stage = kithStage(k, now);
+    var age = stage === 'elder' ? 1.2 : stage === 'grown' ? 1 : 0.3;
+    return bondsIn + age + knowsOf(k).length * 0.4;
+  }
+  function tribeLeader(tribe, now) {
+    return tribe.members.slice().sort(function (a, b) {
+      return tribeStanding(b, tribe, now) - tribeStanding(a, tribe, now) || (a.id < b.id ? -1 : 1);
+    })[0];
+  }
+  // is this kith the recognised leader of its tribe right now?
+  function leaderOfKith(w, k, now) {
+    var tribe = tribeOfKith(w, k.id);
+    if (!tribe) return null;
+    var leader = tribeLeader(tribe, now);
+    return leader && leader.id === k.id ? tribe : null;
+  }
+  // a seeded moment an eligible outcast turns against the folk, or null
+  function turnMoment(worldId, kithId, t) {
+    var period = Math.floor(t / TURN_PERIOD);
+    var rng = mulberry32(hash32(worldId + ':turn:' + kithId + ':' + period));
+    if (rng() >= 0.5) return null; // even the bitter mostly do not
+    return period * TURN_PERIOD + Math.floor(rng() * TURN_PERIOD);
+  }
+
+  function factionTick(w, now, events) {
+    var tribes = tribesOf(w);
+    var villages = raisedHearths(w, now).filter(function (h) {
+      return w.chronicle.some(function (e) { return e.id === 'v' + h.id; });
+    });
+
+    // leaders rise: the most-tied, most-seasoned voice of a tribe, told once
+    tribes.forEach(function (tribe) {
+      var leader = tribeLeader(tribe, now);
+      if (!leader || leader.led) return;
+      leader.led = true; leader.u = bumpClock(w);
+      var text = kithLabel(leader) + ' came to be the voice of the ' + tribe.name + ' — the folk look to it now.';
+      chronicle(w, 'faction', text, 'led' + leader.id);
+      events.push({ kind: 'faction', text: text });
+    });
+
+    if (!villages.length) return; // the drama below needs a village to prey on and to defend
+
+    // who is turned already? at most one villain troubles a world at a time
+    var villain = livingKith(w).filter(function (k) { return k.turned && !k.departed; })[0];
+
+    // the turn: a lone, hard, friendless soul turns against the folk
+    if (!villain) {
+      livingKith(w).forEach(function (k) {
+        if (villain) return;
+        if (k.turned || k.wanderer || k.expedition || k.sick) return;
+        if (k.brain.boldness <= 0.65 || k.brain.sociability >= 0.35) return;
+        if (kithStage(k, now) !== 'grown') return;
+        if (tribes.some(function (t) { return t.members.some(function (m) { return m.id === k.id; }); })) return; // not an outcast
+        var at = turnMoment(w.id, k.id, now);
+        if (at === null || now < at) return;
+        k.turned = true; k.turnedAt = at; k.u = bumpClock(w);
+        villain = k;
+        var text = kithLabel(k) + ', friendless and hard, turned against the folk. It began to take in the night what it would not be given.';
+        chronicle(w, 'faction', text, 'trn' + k.id);
+        events.push({ kind: 'faction', text: text });
+      });
+    }
+
+    if (!villain) return;
+    var target = villages[0]; // the nearest/first village bears the brunt
+    var reckonRng = mulberry32(hash32(w.id + ':reckon:' + villain.id));
+    var reckonDelay = (3 + Math.floor(reckonRng() * 4)) * DAY;
+    var reckonAt = (villain.turnedAt || now) + reckonDelay;
+
+    // raids: a turned kith strips the village's gardens, a plant a day
+    var dayBucket = Math.floor(now / DAY);
+    if (now < reckonAt) {
+      var raidId = 'rd' + villain.id + dayBucket;
+      if (!w.chronicle.some(function (e) { return e.id === raidId; })) {
+        var rrng = mulberry32(hash32(w.id + ':raid:' + villain.id + ':' + dayBucket));
+        if (rrng() < 0.5) {
+          // strip the village's ripest garden plant — deterministic pick
+          var prey = Object.keys(w.plants).map(function (id) { return w.plants[id]; })
+            .filter(function (p) { return p.growth > 0.4 && structDist(target, p.x, p.y) < 0.35; })
+            .sort(function (a, b) { return b.growth - a.growth || (a.id < b.id ? -1 : 1); })[0];
+          if (prey) {
+            prey.growth = 0; prey.planted = now; prey.tick = now; prey.raided = now; prey.u = bumpClock(w);
+            var vname = villageNameAt(w, target.id);
+            var rtext = 'In the night, ' + kithLabel(villain) + ' stripped ' + vname + '’s garden bare. The folk woke to bare stems.';
+            chronicle(w, 'faction', rtext, raidId);
+            events.push({ kind: 'faction', text: rtext });
+          }
+        }
+      }
+    }
+
+    // the reckoning: the village's champion stands against the villain
+    if (now >= reckonAt && !w.chronicle.some(function (e) { return e.id === 'rck' + villain.id; })) {
+      var tribeHere = tribesOf(w).filter(function (t) {
+        return t.members.some(function (m) { return structDist(target, m.x, m.y) < 0.3; });
+      })[0] || tribesOf(w)[0];
+      var champion = tribeHere ? tribeLeader(tribeHere, now)
+        : livingKith(w).filter(function (o) { return o.id !== villain.id; })
+            .sort(function (a, b) { return b.brain.boldness - a.brain.boldness || (a.id < b.id ? -1 : 1); })[0];
+      // the folk together almost always prevail; sometimes at a cost
+      villain.departed = reckonAt; villain.turned = false;
+      if (w.emissary === villain.id) w.emissary = null;
+      villain.u = bumpClock(w);
+      var cname = champion ? kithLabel(champion) : 'the folk';
+      var vname2 = villageNameAt(w, target.id);
+      var costRoll = reckonRng(); // continues the reckon seed
+      var text2;
+      if (costRoll < 0.6 || !champion) {
+        text2 = cname + ' of ' + vname2 + ' stood against ' + kithLabel(villain) +
+          ', and the folk drove it out beyond the edge of the world. It was not seen again.';
+      } else if (costRoll < 0.85) {
+        champion.scars = (champion.scars || 0) + 1; champion.u = bumpClock(w);
+        text2 = cname + ' drove ' + kithLabel(villain) + ' out beyond the edge, and carries a long scar from the fight. The village is free of it.';
+      } else {
+        champion.passed = reckonAt; if (w.emissary === champion.id) w.emissary = null; champion.u = bumpClock(w);
+        text2 = cname + ' fell driving ' + kithLabel(villain) + ' out. The folk are free of it now, and grieve the one who freed them.';
+      }
+      chronicle(w, 'faction', text2, 'rck' + villain.id);
+      events.push({ kind: 'faction', text: text2 });
+    }
   }
 
   /* ---------- the almanac ----------
@@ -2613,6 +2748,7 @@
     disasterTick(w, now, events);
     plagueTick(w, now, events);
     ritualTick(w, now, events);
+    factionTick(w, now, events);
     var terrain = makeTerrain(w.id);
     var gathering = (w.gathering && now < w.gathering.until) ? w.gathering : null;
     var rng = mulberry32(hash32(w.id + ':' + Math.floor(now / 1000)));
@@ -2663,6 +2799,7 @@
         k.intent = rising.type === 'hearth' ? 'tending the new hearth' : 'raising the lean-to';
       }
       if (k.sick) { k.intent = 'unwell — low and slow'; k.drive = 'rest'; k.goal = 'rest'; }
+      if (k.turned) { k.intent = 'prowling, turned against the folk'; k.drive = 'purpose'; }
       // the country turns on the folk: drop everything and run for high ground.
       // This is real to watch, but WHO lives is decided by content at the
       // strike, not by where the running left them.
@@ -3736,6 +3873,9 @@
     plagueDue: plagueDue,
     plagueTick: plagueTick,
     ritualTick: ritualTick,
+    factionTick: factionTick,
+    tribeLeader: tribeLeader,
+    leaderOfKith: leaderOfKith,
     presentKith: presentKith,
     almanacTick: almanacTick,
     almanacPages: almanacPages,

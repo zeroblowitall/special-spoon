@@ -231,6 +231,9 @@ html, body {
 .chronicle-entry.kind-merge .what { color: var(--accent); }
 .chronicle-entry.kind-born .what { color: var(--good); }
 .chronicle-entry.kind-ritual .what { color: #e8c9a0; font-style: italic; }
+.chronicle-entry.kind-faction .what { color: #e0a48a; }
+.turned-ring { animation: turnedPulse 1.5s ease-in-out infinite; }
+@keyframes turnedPulse { 0%, 100% { opacity: 0.85; } 50% { opacity: 0.4; } }
 
 /* Camera */
 #world { touch-action: none; cursor: grab; }
